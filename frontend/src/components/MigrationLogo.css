@@ -1,0 +1,114 @@
+.migration-logo {
+  display: flex;
+  align-items: center;
+  text-decoration: none;
+  color: inherit;
+  transition: opacity 0.2s;
+}
+
+.migration-logo:hover {
+  opacity: 0.9;
+}
+
+.logo-container {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.logo-icon {
+  width: 160px;
+  height: 32px;
+  color: #f7fafc;
+}
+
+[data-theme="dark"] .logo-icon {
+  color: #e2e8f0;
+}
+
+.migration-arrows {
+  opacity: 1;
+}
+
+.arrow {
+  opacity: 0.6;
+  transition: opacity 0.3s;
+}
+
+.arrow-left {
+  animation: migrateFlow 3s ease-in-out infinite;
+  animation-delay: 0s;
+}
+
+.arrow-center {
+  animation: migrateFlow 3s ease-in-out infinite;
+  animation-delay: 0.6s;
+}
+
+.arrow-right {
+  animation: migrateFlow 3s ease-in-out infinite;
+  animation-delay: 1.2s;
+}
+
+@keyframes migrateFlow {
+  0% {
+    transform: translateX(0);
+    opacity: 0.5;
+  }
+  30% {
+    transform: translateX(4px);
+    opacity: 1;
+  }
+  60% {
+    transform: translateX(8px);
+    opacity: 0.95;
+  }
+  90% {
+    transform: translateX(4px);
+    opacity: 0.7;
+  }
+  100% {
+    transform: translateX(0);
+    opacity: 0.5;
+  }
+}
+
+.logo-text {
+  font-weight: 600;
+  letter-spacing: 0.5px;
+}
+
+.logo-label {
+  font-size: 0.875rem;
+  font-weight: 500;
+  opacity: 0.75;
+  letter-spacing: 0.5px;
+  text-transform: uppercase;
+  color: inherit;
+}
+
+[data-theme="dark"] .logo-label {
+  opacity: 0.7;
+}
+
+@media (max-width: 768px) {
+  .logo-icon {
+    width: 140px;
+    height: 28px;
+  }
+  
+  .logo-label {
+    display: none;
+  }
+}
+
+@media (max-width: 480px) {
+  .logo-icon {
+    width: 120px;
+    height: 24px;
+  }
+  
+  .logo-container {
+    gap: 0.5rem;
+  }
+}

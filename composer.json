@@ -1,0 +1,40 @@
+{
+  "name": "mb-migration/dashboard",
+  "description": "Standalone Dashboard for MB Migration System",
+  "type": "project",
+  "require": {
+    "php": "^8.3",
+    "ext-curl": "*",
+    "ext-json": "*",
+    "ext-mbstring": "*",
+    "ext-pdo": "*",
+    "google/apiclient": "^2.15",
+    "monolog/monolog": "^3.0",
+    "symfony/dotenv": "^7.0",
+    "symfony/http-foundation": "^7.0",
+    "vlucas/phpdotenv": "^5.6"
+  },
+  "autoload": {
+    "psr-4": {
+      "Dashboard\\": "src/",
+      "MBMigration\\": "lib/MBMigration/"
+    },
+    "files": [
+      "lib/MBMigration/Core/Config.php"
+    ]
+  },
+  "config": {
+    "allow-plugins": {
+      "symfony/runtime": true
+    },
+    "optimize-autoloader": true,
+    "sort-packages": true
+  },
+  "scripts": {
+    "post-install-cmd": [
+      "@php -r \"file_exists('.env') || copy('.env.example', '.env');\""
+    ]
+  },
+  "minimum-stability": "stable",
+  "prefer-stable": true
+}

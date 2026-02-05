@@ -1,0 +1,133 @@
+name: Deploy to Production
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch: # Позволяет запускать вручную
+
+env:
+  DOCKER_IMAGE_NAME: mb-dashboard
+  DOCKER_IMAGE_TAG: latest
+
+jobs:
+  build-and-deploy:
+    name: Build and Deploy
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to Docker Hub (optional)
+        if: ${{ secrets.DOCKER_HUB_USERNAME != '' }}
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKER_HUB_USERNAME }}
+          password: ${{ secrets.DOCKER_HUB_PASSWORD }}
+
+      - name: Build Docker image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          target: production
+          push: false
+          tags: ${{ env.DOCKER_IMAGE_NAME }}:${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Save Docker image
+        run: |
+          docker save ${{ env.DOCKER_IMAGE_NAME }}:${{ github.sha }} | gzip > image.tar.gz
+
+      - name: Set deployment variables
+        id: deploy
+        run: |
+          echo "ssh_port=${{ secrets.DEPLOY_PORT || '22' }}" >> $GITHUB_OUTPUT
+          echo "http_port=${{ secrets.DEPLOY_PORT_HTTP || '8088' }}" >> $GITHUB_OUTPUT
+          echo "project_path=${{ secrets.DEPLOY_PROJECT_PATH || '/opt/mb-dashboard' }}" >> $GITHUB_OUTPUT
+
+      - name: Copy image to server
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ secrets.DEPLOY_HOST }}
+          username: ${{ secrets.DEPLOY_USER }}
+          key: ${{ secrets.DEPLOY_SSH_KEY }}
+          port: ${{ steps.deploy.outputs.ssh_port }}
+          source: "image.tar.gz"
+          target: "/tmp/"
+
+      - name: Deploy to server
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.DEPLOY_HOST }}
+          username: ${{ secrets.DEPLOY_USER }}
+          key: ${{ secrets.DEPLOY_SSH_KEY }}
+          port: ${{ steps.deploy.outputs.ssh_port }}
+          script: |
+            set -e
+            HTTP_PORT="${{ steps.deploy.outputs.http_port }}"
+            PROJECT_PATH="${{ steps.deploy.outputs.project_path }}"
+            IMAGE_NAME="${{ env.DOCKER_IMAGE_NAME }}"
+            IMAGE_TAG="${{ github.sha }}"
+            
+            echo "🚀 Начинаем деплой..."
+            
+            # Загружаем образ
+            echo "📦 Загружаем Docker образ..."
+            docker load < /tmp/image.tar.gz
+            rm /tmp/image.tar.gz
+            
+            # Останавливаем старый контейнер
+            echo "🛑 Останавливаем старый контейнер..."
+            docker stop ${IMAGE_NAME} 2>/dev/null || true
+            docker rm ${IMAGE_NAME} 2>/dev/null || true
+            
+            # Создаем директории если их нет
+            echo "📁 Создаем директории..."
+            mkdir -p ${PROJECT_PATH}/var/log
+            mkdir -p ${PROJECT_PATH}/var/cache
+            mkdir -p ${PROJECT_PATH}/var/tmp
+            
+            # Запускаем новый контейнер
+            echo "▶️  Запускаем новый контейнер..."
+            docker run -d \
+              --name ${IMAGE_NAME} \
+              --restart unless-stopped \
+              -p ${HTTP_PORT}:80 \
+              -v ${PROJECT_PATH}/.env:/project/.env:ro \
+              -v ${PROJECT_PATH}/var/log:/project/var/log \
+              -v ${PROJECT_PATH}/var/cache:/project/var/cache \
+              -v ${PROJECT_PATH}/var/tmp:/project/var/tmp \
+              ${IMAGE_NAME}:${IMAGE_TAG}
+            
+            # Очищаем старые образы
+            echo "🧹 Очищаем старые образы..."
+            docker image prune -f
+            
+            # Проверяем здоровье
+            echo "🏥 Проверяем здоровье приложения..."
+            sleep 10
+            for i in {1..5}; do
+              if curl -f http://localhost:${HTTP_PORT}/api/health; then
+                echo "✅ Приложение успешно запущено!"
+                exit 0
+              fi
+              echo "⏳ Попытка $i/5, ждем..."
+              sleep 5
+            done
+            echo "❌ Приложение не отвечает после 5 попыток"
+            docker logs ${IMAGE_NAME} --tail 50
+            exit 1
+
+      - name: Notify deployment status
+        if: always()
+        run: |
+          if [ "${{ job.status }}" == "success" ]; then
+            echo "✅ Deployment successful!"
+          else
+            echo "❌ Deployment failed!"
+          fi

@@ -1,0 +1,92 @@
+services:
+  dashboard:
+    platform: linux/amd64
+    container_name: mb_dashboard
+    restart: unless-stopped
+    build:
+      context: ./
+      target: development
+      args:
+        - UID=1000
+    ports:
+      - "8088:80"  # Dashboard на порту 8088
+    dns:
+      - 8.8.8.8
+      - 8.8.4.4
+      - 1.1.1.1
+    env_file:
+      - .env
+    environment:
+      APP_ENV: ${APP_ENV:-production}
+      APP_DEBUG: ${APP_DEBUG:-0}
+      # Database
+      MG_DB_HOST: ${MG_DB_HOST:-localhost}
+      MG_DB_NAME: ${MG_DB_NAME:-migration_db}
+      MG_DB_USER: ${MG_DB_USER:-root}
+      MG_DB_PASS: ${MG_DB_PASS:-}
+      MG_DB_PORT: ${MG_DB_PORT:-3306}
+      # Migration API
+      MIGRATION_API_URL: ${MIGRATION_API_URL:-http://localhost:8080}
+      # Brizy API
+      BRIZY_TOKEN: ${BRIZY_TOKEN:-}
+      BRIZY_HOST: ${BRIZY_HOST:-https://admin.brizy.io}
+      BRIZY_CLOUD_HOST: ${BRIZY_CLOUD_HOST:-${BRIZY_HOST:-https://admin.brizy.io}}
+    volumes:
+      - ./:/project
+      - ./var/log:/project/var/log
+      - ./var/cache:/project/var/cache
+      - ./var/tmp:/project/var/tmp
+    networks:
+      - dashboard_network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost/api/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+  # Опционально: MySQL для локальной разработки
+  # Раскомментируйте если нужна локальная БД
+  # mysql:
+  #   platform: linux/amd64
+  #   image: mysql:8.0
+  #   container_name: mb_dashboard_mysql
+  #   restart: unless-stopped
+  #   ports:
+  #     - "3307:3306"
+  #   volumes:
+  #     - mysql_data:/var/lib/mysql
+  #   environment:
+  #     MYSQL_DATABASE: ${MG_DB_NAME:-migration_db}
+  #     MYSQL_USER: ${MG_DB_USER:-root}
+  #     MYSQL_PASSWORD: ${MG_DB_PASS:-}
+  #     MYSQL_ROOT_PASSWORD: ${MG_DB_PASS:-root}
+  #   healthcheck:
+  #     test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
+  #     interval: 10s
+  #     timeout: 5s
+  #     retries: 5
+  #   networks:
+  #     - dashboard_network
+
+  # Composer для установки зависимостей
+  composer:
+    platform: linux/amd64
+    container_name: mb_dashboard_composer
+    restart: "no"
+    build:
+      context: ./
+      target: development
+    entrypoint: /usr/bin/composer
+    command: install
+    volumes:
+      - ./:/project:delegated
+    networks:
+      - dashboard_network
+
+networks:
+  dashboard_network:
+    driver: bridge
+
+# volumes:
+#   mysql_data:

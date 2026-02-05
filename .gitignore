@@ -1,0 +1,15 @@
+/vendor/
+/node_modules/
+/.env
+/var/cache/*
+/var/log/*
+/var/tmp/*
+!/var/cache/.gitkeep
+!/var/log/.gitkeep
+!/var/tmp/.gitkeep
+/frontend/dist/
+/frontend/node_modules/
+/.idea/
+/.vscode/
+*.log
+.DS_Store

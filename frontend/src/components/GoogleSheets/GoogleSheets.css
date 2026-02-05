@@ -1,0 +1,410 @@
+.google-sheets-page {
+  padding: 20px;
+  max-width: 1200px;
+  margin: 0 auto;
+}
+
+.page-header {
+  margin-bottom: 30px;
+}
+
+.page-header h1 {
+  margin: 0 0 10px 0;
+  font-size: 28px;
+  font-weight: 600;
+}
+
+.page-description {
+  color: var(--text-secondary, #666);
+  margin: 0;
+  font-size: 14px;
+}
+
+.tabs {
+  display: flex;
+  gap: 10px;
+  margin-bottom: 30px;
+  border-bottom: 2px solid var(--border-color, #e0e0e0);
+}
+
+.tab {
+  padding: 12px 20px;
+  background: none;
+  border: none;
+  border-bottom: 3px solid transparent;
+  cursor: pointer;
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--text-secondary, #666);
+  transition: all 0.2s;
+}
+
+.tab:hover {
+  color: var(--primary-color, #007bff);
+  background: var(--bg-hover, #f5f5f5);
+}
+
+.tab.active {
+  color: var(--primary-color, #007bff);
+  border-bottom-color: var(--primary-color, #007bff);
+}
+
+.tab-content {
+  min-height: 400px;
+}
+
+/* GoogleSheetsList */
+.google-sheets-list {
+  width: 100%;
+}
+
+.sheets-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+  gap: 20px;
+}
+
+.table-container {
+  overflow-x: auto;
+  border: 1px solid var(--border-color, #e0e0e0);
+  border-radius: 8px;
+  background: var(--bg-card, #fff);
+}
+
+.data-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 14px;
+}
+
+.data-table thead {
+  background: var(--bg-secondary, #f8f9fa);
+  border-bottom: 2px solid var(--border-color, #e0e0e0);
+}
+
+.data-table th {
+  padding: 12px 16px;
+  text-align: left;
+  font-weight: 600;
+  color: var(--text-primary, #333);
+  white-space: nowrap;
+}
+
+.data-table td {
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--border-color, #e0e0e0);
+  color: var(--text-primary, #333);
+}
+
+.data-table tbody tr:hover {
+  background: var(--bg-hover, #f5f5f5);
+}
+
+.data-table tbody tr:last-child td {
+  border-bottom: none;
+}
+
+.table-cell-content {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.table-name {
+  font-weight: 500;
+  color: var(--text-primary, #333);
+}
+
+.table-id {
+  font-size: 12px;
+  color: var(--text-secondary, #666);
+  font-family: monospace;
+}
+
+.wave-name {
+  font-weight: 500;
+  color: var(--text-primary, #333);
+}
+
+.wave-id {
+  font-size: 12px;
+  color: var(--text-secondary, #666);
+}
+
+.text-muted {
+  color: var(--text-secondary, #999);
+  font-style: italic;
+}
+
+.table-actions {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.status-badge {
+  display: inline-block;
+  padding: 4px 8px;
+  border-radius: 4px;
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.status-badge.status-pending {
+  background: #fff3cd;
+  color: #856404;
+}
+
+.status-badge.status-in-progress {
+  background: #cfe2ff;
+  color: #084298;
+}
+
+.status-badge.status-completed {
+  background: #d1e7dd;
+  color: #0f5132;
+}
+
+.status-badge.status-error {
+  background: #f8d7da;
+  color: #842029;
+}
+
+.status-badge.status-unknown {
+  background: #e9ecef;
+  color: #495057;
+}
+
+.sheet-card {
+  border: 1px solid var(--border-color, #e0e0e0);
+  border-radius: 8px;
+  padding: 20px;
+  background: var(--bg-card, #fff);
+  transition: box-shadow 0.2s;
+}
+
+.sheet-card:hover {
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+}
+
+.sheet-card-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  margin-bottom: 15px;
+}
+
+.sheet-name {
+  margin: 0;
+  font-size: 18px;
+  font-weight: 600;
+  flex: 1;
+  word-break: break-word;
+}
+
+.sheet-actions {
+  display: flex;
+  gap: 8px;
+  margin-left: 10px;
+}
+
+.sheet-card-body {
+  margin-top: 15px;
+}
+
+.sheet-info {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.info-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 10px;
+}
+
+.info-label {
+  font-weight: 500;
+  color: var(--text-secondary, #666);
+  font-size: 13px;
+  white-space: nowrap;
+}
+
+.info-value {
+  color: var(--text-primary, #333);
+  font-size: 13px;
+  text-align: right;
+  word-break: break-word;
+}
+
+.info-value.warning {
+  color: var(--warning-color, #ff9800);
+}
+
+.loading, .error, .empty-state {
+  text-align: center;
+  padding: 40px 20px;
+  color: var(--text-secondary, #666);
+}
+
+.error {
+  color: var(--error-color, #dc3545);
+}
+
+.empty-state-hint {
+  font-size: 13px;
+  margin-top: 8px;
+  color: var(--text-secondary, #999);
+}
+
+/* GoogleSheetsConnect */
+.google-sheets-connect {
+  max-width: 600px;
+}
+
+.connect-form {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+.form-group {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.form-group label {
+  font-weight: 500;
+  font-size: 14px;
+  color: var(--text-primary, #333);
+}
+
+.required {
+  color: var(--error-color, #dc3545);
+}
+
+.form-group input,
+.form-group select {
+  padding: 10px;
+  border: 1px solid var(--border-color, #e0e0e0);
+  border-radius: 4px;
+  font-size: 14px;
+  transition: border-color 0.2s;
+}
+
+.form-group input:focus,
+.form-group select:focus {
+  outline: none;
+  border-color: var(--primary-color, #007bff);
+}
+
+.form-group input:disabled,
+.form-group select:disabled {
+  background: var(--bg-disabled, #f5f5f5);
+  cursor: not-allowed;
+}
+
+.form-hint {
+  font-size: 12px;
+  color: var(--text-secondary, #666);
+  margin-top: 4px;
+}
+
+.form-hint strong {
+  color: var(--text-primary, #333);
+}
+
+.form-actions {
+  display: flex;
+  gap: 10px;
+  margin-top: 10px;
+}
+
+.message {
+  padding: 12px;
+  border-radius: 4px;
+  font-size: 14px;
+}
+
+.message-error {
+  background: var(--error-bg, #fee);
+  color: var(--error-color, #dc3545);
+  border: 1px solid var(--error-color, #dc3545);
+}
+
+.message-success {
+  background: var(--success-bg, #efe);
+  color: var(--success-color, #28a745);
+  border: 1px solid var(--success-color, #28a745);
+}
+
+/* GoogleSheetsLinkWave */
+.google-sheets-link-wave {
+  max-width: 600px;
+}
+
+.link-form {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+/* GoogleSheetsSyncStatus */
+.google-sheets-sync-status {
+  max-width: 600px;
+}
+
+.sync-status-card {
+  border: 1px solid var(--border-color, #e0e0e0);
+  border-radius: 8px;
+  padding: 20px;
+  background: var(--bg-card, #fff);
+}
+
+.sync-status-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 20px;
+  padding-bottom: 15px;
+  border-bottom: 1px solid var(--border-color, #e0e0e0);
+}
+
+.sync-status-header h4 {
+  margin: 0;
+  font-size: 18px;
+  font-weight: 600;
+}
+
+.sync-status-body {
+  display: flex;
+  flex-direction: column;
+  gap: 15px;
+}
+
+.status-info {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+/* Buttons are imported from common.css */
+
+/* Responsive */
+@media (max-width: 768px) {
+  .sheets-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .tabs {
+    flex-wrap: wrap;
+  }
+
+  .tab {
+    flex: 1;
+    min-width: 120px;
+  }
+}
