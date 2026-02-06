@@ -22,8 +22,12 @@ export default function Login() {
 
       if (response.success) {
         // Сохраняем session_id в localStorage для использования в API запросах
+        // Куки уже установлены сервером автоматически
         if (response.data?.session_id) {
           localStorage.setItem('dashboard_session', response.data.session_id);
+          // Также устанавливаем куки вручную на случай, если сервер не установил
+          // (для совместимости и надежности)
+          document.cookie = `dashboard_session=${response.data.session_id}; path=/; max-age=${7 * 24 * 60 * 60}; SameSite=Lax`;
         }
         // Сохраняем информацию о пользователе
         if (response.data?.user) {

@@ -516,7 +516,9 @@ class MigrationController
             $brzProjectId = $details['mapping']['brz_project_id'];
             
             // Определяем URL веб-хука
-            $dashboardBaseUrl = $_ENV['DASHBOARD_BASE_URL'] ?? getenv('DASHBOARD_BASE_URL') ?: 'http://localhost:8088';
+            $dashboardBaseUrl = $_ENV['DASHBOARD_URL'] ?? getenv('DASHBOARD_URL') 
+                ?? $_ENV['DASHBOARD_BASE_URL'] ?? getenv('DASHBOARD_BASE_URL') 
+                ?: 'http://localhost:8088';
             $webhookUrl = rtrim($dashboardBaseUrl, '/') . '/api/webhooks/migration-result';
             
             // Проверяем, был ли получен веб-хук (проверяем наличие результата в БД)

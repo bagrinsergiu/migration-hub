@@ -372,12 +372,12 @@ export default function WaveReview() {
                           )}
                         </td>
                         <td>
-                          {(migration as any).reviewer?.person_brizy ? (
-                            <span title={(migration as any).reviewer?.uuid}>
-                              {(migration as any).reviewer.person_brizy}
+                          {migration.reviewer?.person_brizy ? (
+                            <span title={migration.reviewer?.uuid || ''}>
+                              {migration.reviewer.person_brizy}
                             </span>
                           ) : (
-                            '—'
+                            <span className="no-reviewer">—</span>
                           )}
                         </td>
                         <td className="uuid-cell">{formatUUID(migration.mb_project_uuid)}</td>

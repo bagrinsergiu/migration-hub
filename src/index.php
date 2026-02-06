@@ -502,6 +502,12 @@ return function (array $context, Request $request) use ($debugMode): Response {
                         $allowedTabs = $projectAccess && isset($projectAccess['allowed_tabs']) 
                             ? $projectAccess['allowed_tabs'] 
                             : ['overview', 'details', 'logs', 'screenshots', 'quality', 'analysis']; // Все вкладки по умолчанию
+                        
+                        // Всегда добавляем 'analysis' в список разрешенных вкладок, если её там нет
+                        if (!in_array('analysis', $allowedTabs)) {
+                            $allowedTabs[] = 'analysis';
+                        }
+                        
                         $migrationData['data']['allowed_tabs'] = $allowedTabs;
                         return new JsonResponse($migrationData, 200);
                     }
@@ -1079,6 +1085,11 @@ return function (array $context, Request $request) use ($debugMode): Response {
                 $allowedTabs = $projectAccess && isset($projectAccess['allowed_tabs']) 
                     ? $projectAccess['allowed_tabs'] 
                     : ['overview', 'details', 'logs', 'screenshots', 'quality', 'analysis']; // Все вкладки по умолчанию
+                
+                // Всегда добавляем 'analysis' в список разрешенных вкладок, если её там нет
+                if (!in_array('analysis', $allowedTabs)) {
+                    $allowedTabs[] = 'analysis';
+                }
                 
                 if (!in_array('logs', $allowedTabs)) {
                     return new JsonResponse([

@@ -533,7 +533,10 @@ class GoogleSheetsController
             
             if ($isBrowserRequest) {
                 // HTML редирект для браузера
-                $fullRedirectUrl = rtrim($_ENV['DASHBOARD_BASE_URL'] ?? getenv('DASHBOARD_BASE_URL') ?: 'http://localhost:8088', '/') . $redirectUrl;
+                $dashboardBaseUrl = $_ENV['DASHBOARD_URL'] ?? getenv('DASHBOARD_URL') 
+                    ?? $_ENV['DASHBOARD_BASE_URL'] ?? getenv('DASHBOARD_BASE_URL') 
+                    ?: 'http://localhost:8088';
+                $fullRedirectUrl = rtrim($dashboardBaseUrl, '/') . $redirectUrl;
                 $html = <<<HTML
 <!DOCTYPE html>
 <html>

@@ -39,9 +39,28 @@ export function UserProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
   const [loading, setLoading] = useState(true);
 
+  // Функция для получения session_id из куки или localStorage
+  const getSessionId = (): string | null => {
+    // Сначала пытаемся получить из куки
+    if (typeof document !== 'undefined') {
+      const cookies = document.cookie.split(';');
+      for (let cookie of cookies) {
+        const [name, value] = cookie.trim().split('=');
+        if (name === 'dashboard_session' && value) {
+          // Синхронизируем с localStorage
+          localStorage.setItem('dashboard_session', value);
+          return value;
+        }
+      }
+    }
+    
+    // Если не нашли в куки, берем из localStorage
+    return localStorage.getItem('dashboard_session');
+  };
+
   const loadUser = async () => {
     try {
-      const sessionId = localStorage.getItem('dashboard_session');
+      const sessionId = getSessionId();
       if (!sessionId) {
         setUser(null);
         setLoading(false);
@@ -51,14 +70,25 @@ export function UserProvider({ children }: { children: ReactNode }) {
       const response = await api.checkAuth();
       if (response.success && response.data?.authenticated && response.data?.user) {
         setUser(response.data.user);
+        // Сохраняем пользователя в localStorage для быстрого доступа
+        localStorage.setItem('dashboard_user', JSON.stringify(response.data.user));
       } else {
         setUser(null);
         localStorage.removeItem('dashboard_session');
         localStorage.removeItem('dashboard_user');
+        // Удаляем куки
+        if (typeof document !== 'undefined') {
+          document.cookie = 'dashboard_session=; path=/; expires=Thu, 01 Jan 1970 00:00:00 GMT';
+        }
       }
     } catch (err) {
       setUser(null);
       localStorage.removeItem('dashboard_session');
+      localStorage.removeItem('dashboard_user');
+      // Удаляем куки
+      if (typeof document !== 'undefined') {
+        document.cookie = 'dashboard_session=; path=/; expires=Thu, 01 Jan 1970 00:00:00 GMT';
+      }
     } finally {
       setLoading(false);
     }

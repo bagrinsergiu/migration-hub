@@ -58,7 +58,8 @@ class AuthService
     public function createSession(int $userId, string $username, string $ipAddress = '', string $userAgent = ''): string
     {
         $sessionId = bin2hex(random_bytes(32));
-        $expiresAt = date('Y-m-d H:i:s', time() + 86400); // 24 часа
+        // Увеличиваем время жизни сессии до 7 дней для соответствия куки
+        $expiresAt = date('Y-m-d H:i:s', time() + (86400 * 7)); // 7 дней
 
         $db = $this->dbService->getWriteConnection();
         

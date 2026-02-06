@@ -159,15 +159,22 @@ class AuthController
             $response = new JsonResponse($responseData, 200);
 
             // Устанавливаем cookie
+            // Определяем, используем ли мы HTTPS (для secure флага)
+            $isSecure = (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off') 
+                || (!empty($_SERVER['HTTP_X_FORWARDED_PROTO']) && $_SERVER['HTTP_X_FORWARDED_PROTO'] === 'https');
+            
+            // httpOnly = false, чтобы можно было читать из JS (для синхронизации с localStorage)
+            // secure = true только если используется HTTPS
+            // SameSite = Lax для защиты от CSRF, но с возможностью работы через прокси
             $response->headers->setCookie(
                 new \Symfony\Component\HttpFoundation\Cookie(
                     'dashboard_session',
                     $sessionId,
-                    time() + 86400, // 24 часа
+                    time() + (86400 * 7), // 7 дней для "запомнить меня"
                     '/',
                     null,
-                    false, // httpOnly будет установлен в index.php
-                    true, // secure в production
+                    false, // httpOnly = false для доступа из JS
+                    $isSecure, // secure только при HTTPS
                     false,
                     'Lax'
                 )
@@ -312,10 +319,13 @@ class AuthController
                 $user = $this->authService->getUserFromSession($sessionId);
             }
 
+            // Структура ответа должна соответствовать ApiResponse<T>
             return new JsonResponse([
                 'success' => $isValid,
-                'authenticated' => $isValid,
-                'user' => $user
+                'data' => [
+                    'authenticated' => $isValid,
+                    'user' => $user
+                ]
             ], $isValid ? 200 : 401);
         } catch (\Exception $e) {
             return new JsonResponse([

@@ -1,45 +1,45 @@
 # MB Migration Dashboard - Standalone
 
-Отдельный проект Dashboard для системы миграции MB, работающий на PHP 8.3.
+A standalone Dashboard project for the MB migration system, running on PHP 8.3.
 
-## Требования
+## Requirements
 
-### Для Docker:
+### For Docker:
 - Docker 20.10+
 - Docker Compose 2.0+
 
-### Для локальной установки:
-- PHP 8.3 или выше
+### For local installation:
+- PHP 8.3 or higher
 - Composer
-- MySQL 5.7+ или 8.0+
-- Node.js 18+ (для фронтенда)
+- MySQL 5.7+ or 8.0+
+- Node.js 18+ (for frontend)
 
-## Установка
+## Installation
 
-### С Docker (Рекомендуется)
+### With Docker (Recommended)
 
-1. Скопируйте проект:
+1. Copy the project:
 ```bash
 cd dashboard-standalone
 ```
 
-2. Настройте переменные окружения:
+2. Configure environment variables:
 ```bash
-# Создайте .env файл с вашими настройками
-# Минимально необходимые переменные:
+# Create a .env file with your settings
+# Minimum required variables:
 # MG_DB_HOST, MG_DB_NAME, MG_DB_USER, MG_DB_PASS
-# MIGRATION_API_URL (по умолчанию: http://localhost:8080)
+# MIGRATION_API_URL (default: http://localhost:8080)
 ```
 
-Подробнее о переменных окружения см. [ENV_VARIABLES.md](doc/ENV_VARIABLES.md)
+For more details on environment variables, see [ENV_VARIABLES.md](doc/ENV_VARIABLES.md)
 
-3. Запустите Docker:
+3. Start Docker:
 ```bash
 docker-compose up -d
 docker-compose run --rm composer install
 ```
 
-4. Соберите фронтенд (локально):
+4. Build the frontend (locally):
 ```bash
 cd frontend
 npm install
@@ -47,25 +47,25 @@ npm run build
 cd ..
 ```
 
-### Без Docker
+### Without Docker
 
-1. Скопируйте проект:
+1. Copy the project:
 ```bash
 cd dashboard-standalone
 ```
 
-2. Установите зависимости:
+2. Install dependencies:
 ```bash
 composer install
 ```
 
-3. Настройте переменные окружения:
+3. Configure environment variables:
 ```bash
 cp .env.example .env
-# Отредактируйте .env файл с вашими настройками БД
+# Edit the .env file with your database settings
 ```
 
-4. Соберите фронтенд:
+4. Build the frontend:
 ```bash
 cd frontend
 npm install
@@ -73,9 +73,9 @@ npm run build
 cd ..
 ```
 
-## Конфигурация
+## Configuration
 
-Создайте файл `.env` в корне проекта:
+Create a `.env` file in the project root:
 
 ```env
 # Database Configuration
@@ -85,7 +85,7 @@ MG_DB_USER=your-db-user
 MG_DB_PASS=your-db-password
 MG_DB_PORT=3306
 
-# Migration Server URL (по умолчанию: http://localhost:8080)
+# Migration Server URL (default: http://localhost:8080)
 MIGRATION_API_URL=http://localhost:8080
 
 # Application
@@ -93,102 +93,102 @@ APP_ENV=production
 APP_DEBUG=false
 ```
 
-Подробнее о переменных окружения см. [ENV_VARIABLES.md](doc/ENV_VARIABLES.md)
+For more details on environment variables, see [ENV_VARIABLES.md](doc/ENV_VARIABLES.md)
 
-## Структура проекта
+## Project Structure
 
 ```
 dashboard-standalone/
-├── src/                    # PHP исходный код
-│   ├── Controllers/        # Контроллеры API
-│   ├── Services/           # Бизнес-логика
+├── src/                    # PHP source code
+│   ├── Controllers/        # API Controllers
+│   ├── Services/           # Business logic
 │   └── Middleware/         # Middleware
-├── lib/                    # Зависимости от MBMigration (адаптеры)
+├── lib/                    # Dependencies from MBMigration (adapters)
 │   └── MBMigration/
-├── frontend/               # React приложение
-├── public/                 # Публичные файлы
-├── var/                    # Временные файлы, логи, кэш
+├── frontend/               # React application
+├── public/                 # Public files
+├── var/                    # Temporary files, logs, cache
 └── composer.json
 ```
 
-## Запуск
+## Running
 
-### Docker (Рекомендуется)
+### Docker (Recommended)
 
 ```bash
-# Сборка и запуск
+# Build and start
 docker-compose up -d
 
-# Установка зависимостей
+# Install dependencies
 docker-compose run --rm composer install
 
-# Сборка фронтенда (локально)
+# Build frontend (locally)
 cd frontend && npm install && npm run build && cd ..
 
-# Просмотр логов
+# View logs
 docker-compose logs -f dashboard
 ```
 
-Dashboard будет доступен по адресу: http://localhost:8088
+Dashboard will be available at: http://localhost:8088
 
-Подробнее см. [DOCKER.md](DOCKER.md)
+For more details, see [DOCKER.md](DOCKER.md)
 
-### Development (без Docker)
+### Development (without Docker)
 
 ```bash
 php -S localhost:8088 -t public
 ```
 
-### Production (без Docker)
+### Production (without Docker)
 
-Настройте веб-сервер (Nginx/Apache) для работы с `public/index.php`
+Configure a web server (Nginx/Apache) to work with `public/index.php`
 
 ## API Endpoints
 
-Базовый URL: `http://localhost:8088/api`
+Base URL: `http://localhost:8088/api`
 
-- `GET /health` - Проверка работоспособности
-- `GET /migrations` - Список миграций
-- `GET /migrations/:id` - Детали миграции
-- `POST /migrations/run` - Запуск миграции
-- И другие...
+- `GET /health` - Health check
+- `GET /migrations` - List migrations
+- `GET /migrations/:id` - Migration details
+- `POST /migrations/run` - Run migration
+- And others...
 
-Подробнее см. [API.md](API.md)
+For more details, see [API.md](API.md)
 
-## Миграция из основного проекта
+## Migration from the main project
 
-Этот проект был выделен из основного проекта MB-migration для:
-- Независимого развития
-- Использования современного PHP 8.3
-- Упрощения развертывания
-- Изоляции зависимостей
+This project was extracted from the main MB-migration project for:
+- Independent development
+- Using modern PHP 8.3
+- Simplified deployment
+- Dependency isolation
 
-## CI/CD и автоматический деплой
+## CI/CD and automatic deployment
 
-Проект настроен для автоматического деплоя при пуше в ветку `main` через GitHub Actions.
+The project is configured for automatic deployment when pushing to the `main` branch via GitHub Actions.
 
-### Быстрая настройка
+### Quick setup
 
-1. **Настройте GitHub Secrets:**
-   - `DEPLOY_HOST` - IP или домен сервера
-   - `DEPLOY_USER` - пользователь SSH
-   - `DEPLOY_SSH_KEY` - приватный SSH ключ
+1. **Configure GitHub Secrets:**
+   - `DEPLOY_HOST` - Server IP or domain
+   - `DEPLOY_USER` - SSH user
+   - `DEPLOY_SSH_KEY` - Private SSH key
 
-2. **Подготовьте сервер:**
-   - Установите Docker
-   - Создайте директорию `/opt/mb-dashboard`
-   - Создайте файл `.env` на сервере
+2. **Prepare the server:**
+   - Install Docker
+   - Create directory `/opt/mb-dashboard`
+   - Create `.env` file on the server
 
-3. **Готово!** При каждом пуше в `main` произойдет автоматический деплой.
+3. **Done!** Each push to `main` will trigger automatic deployment.
 
-Подробная инструкция: [CI_CD_SETUP.md](doc/CI_CD_SETUP.md)
+Detailed instructions: [CI_CD_SETUP.md](doc/CI_CD_SETUP.md)
 
-### Ручной деплой
+### Manual deployment
 
 ```bash
 ./scripts/deploy.sh user@server
 ```
 
-## Лицензия
+## License
 
 Proprietary

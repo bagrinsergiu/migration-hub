@@ -7,18 +7,36 @@ const apiClient = axios.create({
   headers: {
     'Content-Type': 'application/json',
   },
+  withCredentials: true, // Всегда отправляем куки с запросами
 });
+
+// Функция для получения session_id из куки или localStorage
+function getSessionId(): string | null {
+  // Сначала пытаемся получить из куки (если доступно)
+  if (typeof document !== 'undefined') {
+    const cookies = document.cookie.split(';');
+    for (let cookie of cookies) {
+      const [name, value] = cookie.trim().split('=');
+      if (name === 'dashboard_session') {
+        // Синхронизируем с localStorage
+        if (value) {
+          localStorage.setItem('dashboard_session', value);
+        }
+        return value || null;
+      }
+    }
+  }
+  
+  // Если не нашли в куки, берем из localStorage
+  return localStorage.getItem('dashboard_session');
+}
 
 // Interceptor для добавления session_id в заголовки
 apiClient.interceptors.request.use(
   (config) => {
-    const sessionId = localStorage.getItem('dashboard_session');
+    const sessionId = getSessionId();
     if (sessionId) {
       config.headers['X-Dashboard-Session'] = sessionId;
-    }
-    // Также добавляем в cookies если нужно
-    if (sessionId && config.headers) {
-      config.withCredentials = true;
     }
     return config;
   },
@@ -135,6 +153,11 @@ export const api = {
   async logout(): Promise<ApiResponse<any>> {
     const response = await apiClient.post('/auth/logout');
     localStorage.removeItem('dashboard_session');
+    localStorage.removeItem('dashboard_user');
+    // Удаляем куки
+    if (typeof document !== 'undefined') {
+      document.cookie = 'dashboard_session=; path=/; expires=Thu, 01 Jan 1970 00:00:00 GMT';
+    }
     return response.data;
   },
 

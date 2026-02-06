@@ -92,7 +92,9 @@ class MigrationExecutionService
         }
 
         // Параметры веб-хука для обратного вызова (сервер миграции вызовет webhook_url по завершении)
-        $dashboardBaseUrl = $_ENV['DASHBOARD_BASE_URL'] ?? getenv('DASHBOARD_BASE_URL') ?: 'http://localhost:8088';
+        $dashboardBaseUrl = $_ENV['DASHBOARD_URL'] ?? getenv('DASHBOARD_URL') 
+            ?? $_ENV['DASHBOARD_BASE_URL'] ?? getenv('DASHBOARD_BASE_URL') 
+            ?: 'http://localhost:8088';
         $queryParams['webhook_url'] = !empty($params['webhook_url'])
             ? $params['webhook_url']
             : rtrim($dashboardBaseUrl, '/') . '/api/webhooks/migration-result';
@@ -200,7 +202,9 @@ class MigrationExecutionService
         $migrationMap = []; // Маппинг curl handle -> индекс миграции
 
         // Базовый URL веб-хука (сервер миграции вызовет его по завершении каждой миграции)
-        $dashboardBaseUrl = $_ENV['DASHBOARD_BASE_URL'] ?? getenv('DASHBOARD_BASE_URL') ?: 'http://localhost:8088';
+        $dashboardBaseUrl = $_ENV['DASHBOARD_URL'] ?? getenv('DASHBOARD_URL') 
+            ?? $_ENV['DASHBOARD_BASE_URL'] ?? getenv('DASHBOARD_BASE_URL') 
+            ?: 'http://localhost:8088';
         $baseWebhookUrl = rtrim($dashboardBaseUrl, '/') . '/api/webhooks/migration-result';
 
         try {
