@@ -1,0 +1,13 @@
+{
+  "name": "migration-hub",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "mcp:playwright": "npx -y @playwright/mcp"
+  },
+  "devDependencies": {
+    "@executeautomation/playwright-mcp-server": "^1.0.12",
+    "@playwright/mcp": "^0.0.54",
+    "playwright": "^1.57.0"
+  }
+}

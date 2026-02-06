@@ -811,7 +811,7 @@ class GoogleSheetsService
                         continue;
                     }
 
-                    $sheetRowNumber = $dataRowIndex + 2; // 1-based, row 1 = headers
+                    $sheetRowNumber = $dataRowIndex + 1; // 1-based: $data[0] = row 1 (headers), $data[1] = row 2 (first data row)
                     $colLetter = $this->columnIndexToA1Letter($websiteBrizyIndex);
                     $rangeA1 = $colLetter . $sheetRowNumber;
 
