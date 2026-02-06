@@ -457,6 +457,26 @@ class MigrationService
             $reviewer = $this->getMigrationReviewer($migrationId);
         }
         
+        // Получаем информацию о волне, если миграция запущена с именем волны
+        $waveInfo = null;
+        $waveId = $mapping['wave_id'] ?? $changesJson['wave_id'] ?? null;
+        if ($waveId) {
+            try {
+                $wave = $this->dbService->getWave($waveId);
+                if ($wave) {
+                    $waveInfo = [
+                        'wave_id' => $wave['wave_id'] ?? $waveId,
+                        'wave_name' => $wave['name'] ?? $changesJson['wave_name'] ?? null,
+                        'workspace_id' => $wave['workspace_id'] ?? null,
+                        'workspace_name' => $wave['workspace_name'] ?? null,
+                    ];
+                }
+            } catch (Exception $e) {
+                // Игнорируем ошибки получения информации о волне
+                error_log("[MigrationService::getMigrationDetails] Не удалось получить информацию о волне {$waveId}: " . $e->getMessage());
+            }
+        }
+        
         return [
             'mapping' => $mapping,
             'result' => $result ? [
@@ -471,6 +491,7 @@ class MigrationService
             'progress' => $migrationValue['progress'] ?? $resultData['progress'] ?? null,
             'warnings' => $migrationValue['message']['warning'] ?? $resultData['message']['warning'] ?? [],
             'reviewer' => $reviewer, // Информация о ревьюере
+            'wave' => $waveInfo, // Информация о волне
         ];
     }
 
@@ -1019,12 +1040,75 @@ class MigrationService
             // Игнорируем ошибки БД
         }
         
+        // ПРИОРИТЕТ: Сначала опрашиваем сервер миграции для получения актуального статуса
+        $serverStatus = null;
+        $source = 'local_file_check'; // По умолчанию используем локальную проверку
+        try {
+            $serverResponse = $this->apiProxy->getMigrationStatusFromServer($mbUuid, $brzProjectId);
+            if ($serverResponse['success'] && isset($serverResponse['data'])) {
+                $serverStatus = $serverResponse['data'];
+                $source = 'migration_server_api';
+                
+                // Синхронизируем статус с сервером миграции
+                if ($mapping) {
+                    $this->syncMigrationStatusFromServer($mbUuid, $brzProjectId, $serverStatus);
+                }
+                
+                // Определяем, запущена ли миграция на сервере
+                $isRunning = isset($serverStatus['status']) && in_array($serverStatus['status'], ['in_progress', 'running'], true);
+                
+                // Формируем результат на основе данных сервера
+                $result = [
+                    'success' => true,
+                    'source' => $source,
+                    'lock_file_exists' => $isRunning, // Если миграция запущена на сервере, считаем что lock существует
+                    'lock_file' => null, // Не используем локальный путь к lock файлу
+                    'process' => [
+                        'running' => $isRunning,
+                        'status' => $serverStatus['status'] ?? 'unknown',
+                        'progress' => $serverStatus['progress'] ?? null,
+                        'started_at' => $serverStatus['started_at'] ?? null,
+                        'updated_at' => $serverStatus['updated_at'] ?? null,
+                        'current_stage' => $serverStatus['progress']['current_stage'] ?? null,
+                        'message' => $isRunning ? 'Миграция выполняется на сервере миграции' : 'Миграция не запущена на сервере'
+                    ],
+                    'server_status' => $serverStatus
+                ];
+                
+                // Если миграция завершена или в ошибке, проверяем локальный lock файл как fallback
+                if (!$isRunning && ($serverStatus['status'] === 'completed' || $serverStatus['status'] === 'error')) {
+                    // Проверяем локальный lock файл только для информации (не для определения статуса)
+                    $lockFile = $this->getLockFilePath($mbUuid, $brzProjectId);
+                    $lockFileExists = @file_exists($lockFile);
+                    if ($lockFileExists) {
+                        $result['lock_file_exists'] = true;
+                        $result['lock_file'] = $lockFile;
+                    }
+                }
+                
+                return $result;
+            }
+        } catch (Exception $e) {
+            // Если сервер недоступен, логируем и продолжаем с локальной проверкой
+            error_log("[MigrationService::getMigrationProcessInfo] Не удалось получить статус с сервера миграции: " . $e->getMessage());
+        }
+        
+        // FALLBACK: Если сервер недоступен, используем локальную проверку lock файла
+        // Но обрабатываем ошибки доступа к файлу gracefully
         $lockFile = $this->getLockFilePath($mbUuid, $brzProjectId);
+        $lockFileExists = false;
+        try {
+            $lockFileExists = file_exists($lockFile);
+        } catch (Exception $e) {
+            // Если файл находится на удаленном сервере и недоступен, это нормально
+            error_log("[MigrationService::getMigrationProcessInfo] Не удалось проверить локальный lock файл (возможно, файл на сервере миграции): " . $e->getMessage());
+        }
+        
         $processInfo = $this->findMigrationProcess($mbUuid, $brzProjectId);
         
         // Если lock-файл не существует и процесс не запущен, проверяем логи
         // чтобы определить, завершилась ли миграция успешно
-        if (!file_exists($lockFile) && !$processInfo['running']) {
+        if (!$lockFileExists && !$processInfo['running']) {
             // Проверяем и обновляем статус, если процесс не найден
             if ($mapping) {
                 $this->checkAndUpdateStaleStatus($mbUuid, $brzProjectId, $mapping);
@@ -1073,8 +1157,9 @@ class MigrationService
         
         $result = [
             'success' => true,
-            'lock_file_exists' => file_exists($lockFile),
-            'lock_file' => $lockFile,
+            'source' => $source,
+            'lock_file_exists' => $lockFileExists,
+            'lock_file' => $lockFileExists ? $lockFile : null,
             'process' => $processInfo
         ];
         
@@ -1165,6 +1250,93 @@ class MigrationService
             'message' => 'Кэш-файл успешно удален',
             'cache_file' => $cacheFile,
             'removed' => true
+        ];
+    }
+
+    /**
+     * Удалить все файлы кэша по ID проекта (только .json файлы, не lock-файлы)
+     * 
+     * @param int $brzProjectId ID проекта Brizy
+     * @return array
+     * @throws Exception
+     */
+    public function removeAllCacheFiles(int $brzProjectId): array
+    {
+        $projectRoot = dirname(__DIR__, 3);
+        $cachePath = $_ENV['CACHE_PATH'] ?? getenv('CACHE_PATH') ?: $projectRoot . '/var/cache';
+        
+        if (!is_dir($cachePath)) {
+            return [
+                'success' => true,
+                'message' => 'Директория кэша не найдена',
+                'cache_path' => $cachePath,
+                'files_removed' => [],
+                'count' => 0
+            ];
+        }
+        
+        if (!is_readable($cachePath)) {
+            throw new Exception('Нет прав на чтение директории кэша: ' . $cachePath);
+        }
+        
+        // Ищем все файлы вида *-{brzProjectId}.json
+        $pattern = $cachePath . '/*-' . $brzProjectId . '.json';
+        $cacheFiles = glob($pattern);
+        
+        if (empty($cacheFiles)) {
+            return [
+                'success' => true,
+                'message' => 'Файлы кэша не найдены',
+                'cache_path' => $cachePath,
+                'pattern' => $pattern,
+                'files_removed' => [],
+                'count' => 0
+            ];
+        }
+        
+        $removedFiles = [];
+        $errors = [];
+        
+        foreach ($cacheFiles as $cacheFile) {
+            // Проверяем, что это действительно .json файл (не .lock)
+            if (substr($cacheFile, -5) !== '.json') {
+                continue;
+            }
+            
+            // Проверяем права на удаление
+            if (!is_writable($cacheFile) && !is_writable($cachePath)) {
+                $errors[] = 'Нет прав на удаление файла: ' . $cacheFile;
+                continue;
+            }
+            
+            $removed = @unlink($cacheFile);
+            
+            if ($removed) {
+                $removedFiles[] = basename($cacheFile);
+            } else {
+                $errors[] = 'Не удалось удалить файл: ' . $cacheFile;
+            }
+        }
+        
+        if (!empty($errors)) {
+            return [
+                'success' => false,
+                'message' => 'Частично удалены файлы кэша. Ошибки: ' . implode('; ', $errors),
+                'cache_path' => $cachePath,
+                'pattern' => $pattern,
+                'files_removed' => $removedFiles,
+                'count' => count($removedFiles),
+                'errors' => $errors
+            ];
+        }
+        
+        return [
+            'success' => true,
+            'message' => 'Все файлы кэша успешно удалены',
+            'cache_path' => $cachePath,
+            'pattern' => $pattern,
+            'files_removed' => $removedFiles,
+            'count' => count($removedFiles)
         ];
     }
 

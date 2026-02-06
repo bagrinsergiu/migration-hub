@@ -1491,6 +1491,50 @@ export default function MigrationDetails() {
               <span className="info-value">{formatDate(details.mapping.updated_at)}</span>
             </div>
           </div>
+          {(details as any).wave && (
+            <div className="wave-section" style={{ marginTop: '1rem', paddingTop: '1rem', borderTop: '1px solid #e0e0e0' }}>
+              <h4 style={{ marginBottom: '0.75rem', fontSize: '1rem', fontWeight: 600 }}>Информация о волне</h4>
+              <div className="info-grid">
+                {(details as any).wave.wave_id && (
+                  <div className="info-item">
+                    <span className="info-label">Wave ID:</span>
+                    <span className="info-value">{((details as any).wave.wave_id as string)}</span>
+                  </div>
+                )}
+                {(details as any).wave.wave_name && (
+                  <div className="info-item">
+                    <span className="info-label">Название волны:</span>
+                    <span className="info-value" style={{ fontWeight: 600, color: '#2563eb' }}>
+                      {((details as any).wave.wave_name as string)}
+                    </span>
+                  </div>
+                )}
+                {(details as any).wave.workspace_name && (
+                  <div className="info-item">
+                    <span className="info-label">Workspace:</span>
+                    <span className="info-value">{((details as any).wave.workspace_name as string)}</span>
+                  </div>
+                )}
+                {(details as any).wave.workspace_id && (
+                  <div className="info-item">
+                    <span className="info-label">Workspace ID:</span>
+                    <span className="info-value">{((details as any).wave.workspace_id as number)}</span>
+                  </div>
+                )}
+              </div>
+              {(details as any).wave.wave_id && (
+                <div style={{ marginTop: '0.75rem' }}>
+                  <a
+                    href={`/waves/${(details as any).wave.wave_id}`}
+                    className="btn btn-secondary"
+                    style={{ fontSize: '0.875rem', padding: '0.375rem 0.75rem' }}
+                  >
+                    Перейти к волне →
+                  </a>
+                </div>
+              )}
+            </div>
+          )}
           {details.mapping.changes_json && (
             <div className="json-section">
               <h4>Changes JSON:</h4>

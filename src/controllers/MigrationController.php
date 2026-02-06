@@ -792,6 +792,38 @@ class MigrationController
     }
 
     /**
+     * DELETE /api/migrations/:id/cache-all
+     * Удалить все файлы кэша по ID проекта (только .json файлы, не lock-файлы)
+     */
+    public function removeAllCache(Request $request, int $id): JsonResponse
+    {
+        try {
+            $details = $this->migrationService->getMigrationDetails($id);
+            
+            if (!$details) {
+                return new JsonResponse([
+                    'success' => false,
+                    'error' => 'Миграция не найдена'
+                ], 404);
+            }
+
+            $brzProjectId = $details['mapping']['brz_project_id'];
+
+            $result = $this->migrationService->removeAllCacheFiles($brzProjectId);
+
+            return new JsonResponse([
+                'success' => $result['success'],
+                'data' => $result
+            ], $result['success'] ? 200 : 500);
+        } catch (Exception $e) {
+            return new JsonResponse([
+                'success' => false,
+                'error' => $e->getMessage()
+            ], 500);
+        }
+    }
+
+    /**
      * POST /api/migrations/:id/reset-status
      * Сбросить статус миграции на pending
      */

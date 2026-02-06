@@ -198,6 +198,31 @@ class DatabaseService
             [$brzProjectId, $mbProjectUuid]
         );
 
+        // Если миграция запущена с именем волны, добавляем информацию о волне в changes_json
+        // Проверяем таблицу migrations для получения wave_id
+        if (empty($metaData['wave_id'])) {
+            try {
+                $migration = $db->find(
+                    'SELECT wave_id FROM migrations WHERE brz_project_id = ? AND mb_project_uuid = ? ORDER BY created_at DESC LIMIT 1',
+                    [$brzProjectId, $mbProjectUuid]
+                );
+                if ($migration && !empty($migration['wave_id'])) {
+                    $metaData['wave_id'] = $migration['wave_id'];
+                    
+                    // Получаем информацию о волне
+                    $wave = $this->getWave($migration['wave_id']);
+                    if ($wave) {
+                        $metaData['wave_name'] = $wave['name'] ?? null;
+                        $metaData['workspace_id'] = $wave['workspace_id'] ?? null;
+                        $metaData['workspace_name'] = $wave['workspace_name'] ?? null;
+                    }
+                }
+            } catch (Exception $e) {
+                // Игнорируем ошибки получения информации о волне
+                error_log("[DatabaseService::upsertMigrationMapping] Не удалось получить информацию о волне: " . $e->getMessage());
+            }
+        }
+
         $changesJson = json_encode($metaData);
 
         if ($existing) {

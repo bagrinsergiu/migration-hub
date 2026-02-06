@@ -243,6 +243,7 @@ return function (array $context, Request $request) use ($debugMode): Response {
                 '/api/migrations/:id/kill' => 'POST - Убить процесс миграции',
                 '/api/migrations/:id/process' => 'GET - Информация о процессе миграции (мониторинг)',
                 '/api/migrations/:id/cache' => 'DELETE - Удалить кэш-файл миграции',
+                '/api/migrations/:id/cache-all' => 'DELETE - Удалить все файлы кэша по ID проекта (только .json файлы, не lock-файлы)',
                 '/api/migrations/:id/reset-status' => 'POST - Сбросить статус миграции на pending',
                 '/api/migrations/:id/hard-reset' => 'POST - Hard reset: удалить lock, cache, убить процесс и сбросить статус',
                 '/api/migrations/:id/logs' => 'GET - Логи миграции',
@@ -1364,6 +1365,14 @@ return function (array $context, Request $request) use ($debugMode): Response {
                 $id = (int)$matches[1];
                 $controller = new MigrationController();
                 return $controller->removeCache($request, $id);
+            }
+        }
+
+        if (preg_match('#^/migrations/(\d+)/cache-all$#', $apiPath, $matches)) {
+            if ($request->getMethod() === 'DELETE') {
+                $id = (int)$matches[1];
+                $controller = new MigrationController();
+                return $controller->removeAllCache($request, $id);
             }
         }
 
