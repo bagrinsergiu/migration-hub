@@ -43,9 +43,7 @@ class MigrationController
                 return $value !== null && $value !== '';
             });
 
-            $limit = (int)($request->query->get('limit') ?? 1000);
-            $limit = min(max(1, $limit), 5000);
-            $migrations = $this->migrationService->getMigrationsList($filters, $limit);
+            $migrations = $this->migrationService->getMigrationsList($filters);
 
             return new JsonResponse([
                 'success' => true,
@@ -263,17 +261,11 @@ class MigrationController
     public function run(Request $request): JsonResponse
     {
         try {
-            error_log('[MIG] MigrationController::run — входящий запрос POST /api/migrations/run');
             $data = json_decode($request->getContent(), true);
             
             if (!$data) {
                 $data = $request->request->all();
             }
-            $logData = array_merge($data ?: [], []);
-            if (!empty($logData['mb_secret'])) {
-                $logData['mb_secret'] = '***';
-            }
-            error_log('[MIG] MigrationController::run — тело запроса (mb_secret скрыт): ' . json_encode($logData));
 
             // Валидация обязательных полей (mb_site_id и mb_secret могут быть из настроек)
             $required = ['mb_project_uuid', 'brz_project_id'];
@@ -296,16 +288,13 @@ class MigrationController
                 ], 400);
             }
             if (empty($data['mb_secret']) && empty($settings['mb_secret'])) {
-                error_log('[MIG] MigrationController::run — ошибка валидации: mb_secret отсутствует');
                 return new JsonResponse([
                     'success' => false,
                     'error' => "mb_secret должен быть указан либо в запросе, либо в настройках"
                 ], 400);
             }
 
-            error_log('[MIG] MigrationController::run — валидация пройдена, вызываем MigrationService::runMigration');
             $result = $this->migrationService->runMigration($data);
-            error_log('[MIG] MigrationController::run — результат runMigration: success=' . (isset($result['success']) && $result['success'] ? 'true' : 'false') . ', http_code=' . ($result['http_code'] ?? 'n/a'));
 
             // Если миграция не успешна, возвращаем ошибку
             if (!$result['success']) {
@@ -341,10 +330,8 @@ class MigrationController
             
             // Создаем и возвращаем JsonResponse
             $jsonResponse = new JsonResponse($responseData, $httpCode);
-            error_log('[MIG] MigrationController::run — ответ клиенту: HTTP ' . $httpCode);
             return $jsonResponse;
         } catch (Exception $e) {
-            error_log('[MIG] MigrationController::run — исключение: ' . $e->getMessage());
             return new JsonResponse([
                 'success' => false,
                 'error' => $e->getMessage()
@@ -359,7 +346,6 @@ class MigrationController
     public function restart(Request $request, int $id): JsonResponse
     {
         try {
-            error_log('[MIG] MigrationController::restart — входящий запрос POST /api/migrations/' . $id . '/restart');
             // Пытаемся получить миграцию по ID (migration_id из таблицы migrations)
             $details = $this->migrationService->getMigrationDetailsById($id);
             
@@ -497,6 +483,38 @@ class MigrationController
     }
 
     /**
+     * GET /api/migrations/:id/status
+     * Получить статус миграции
+     */
+    public function getStatus(int $id): JsonResponse
+    {
+        try {
+            $details = $this->migrationService->getMigrationDetails($id);
+
+            if (!$details) {
+                return new JsonResponse([
+                    'success' => false,
+                    'error' => 'Миграция не найдена'
+                ], 404);
+            }
+
+            return new JsonResponse([
+                'success' => true,
+                'data' => [
+                    'status' => $details['status'],
+                    'mapping' => $details['mapping'],
+                    'result' => $details['result']
+                ]
+            ], 200);
+        } catch (Exception $e) {
+            return new JsonResponse([
+                'success' => false,
+                'error' => $e->getMessage()
+            ], 500);
+        }
+    }
+
+    /**
      * GET /api/migrations/:id/webhook-info
      * Получить информацию о веб-хуке для миграции
      */
@@ -530,16 +548,17 @@ class MigrationController
             $webhookReceivedAt = $migrationResult['created_at'] ?? null;
             
             // Получаем последние логи веб-хука из PHP логов (опционально)
-            // Важно: читаем только последние строки без загрузки всего файла в память,
-            // иначе при большом php-errors.log возможны memory limit → error_log → рост файла (эффект «рекурсии»)
             $webhookLogs = [];
             $logPath = $_ENV['LOG_PATH'] ?? getenv('LOG_PATH') ?: dirname(__DIR__, 3) . '/var/log';
             $logFile = $logPath . '/php/php-errors.log';
             
-            if (file_exists($logFile) && is_readable($logFile)) {
-                $recentLines = $this->readLastLines($logFile, 100);
+            if (file_exists($logFile)) {
+                // Читаем последние 100 строк лога и ищем записи о веб-хуке
+                $logLines = file($logFile);
+                $recentLines = array_slice($logLines, -100);
+                
                 foreach ($recentLines as $line) {
-                    if (strpos($line, 'WebhookController::migrationResult') !== false &&
+                    if (strpos($line, 'WebhookController::migrationResult') !== false && 
                         strpos($line, "mb_project_uuid={$mbUuid}") !== false) {
                         $webhookLogs[] = trim($line);
                     }
@@ -659,75 +678,70 @@ class MigrationController
 
     /**
      * GET /api/migrations/:id/process
-     * Получить информацию о процессе миграции. Приоритет — опрос API сервера миграции;
-     * при недоступности сервера — fallback на локальный мониторинг (lock-файл, процесс).
+     * Получить информацию о процессе миграции (мониторинг)
      */
     public function getProcessInfo(Request $request, int $id): JsonResponse
     {
         try {
-            $brzProjectId = (int) $id;
+            $brzProjectId = $id; // Используем id как brz_project_id
             $mbUuid = null;
+            
+            // Сначала пытаемся найти миграцию в migrations_mapping
             $details = $this->migrationService->getMigrationDetails($id);
-
-            if ($details && isset($details['mapping']['mb_project_uuid'])) {
+            
+            if ($details && isset($details['mapping'])) {
+                // Миграция найдена в migrations_mapping
                 $mbUuid = $details['mapping']['mb_project_uuid'];
+            } else {
+                // Миграция не найдена в migrations_mapping
+                // Пытаемся найти mb_uuid из lock-файла по brz_project_id
+                $projectRoot = dirname(__DIR__, 3);
+                $cachePath = $_ENV['CACHE_PATH'] ?? getenv('CACHE_PATH') ?: $projectRoot . '/var/cache';
+                $lockFilePattern = $cachePath . '/*-' . $brzProjectId . '.lock';
+                $lockFiles = glob($lockFilePattern);
+                
+                if (!empty($lockFiles)) {
+                    // Берем первый найденный lock-файл
+                    $lockFile = $lockFiles[0];
+                    // Извлекаем mb_uuid из имени файла: {mb_uuid}-{brz_id}.lock
+                    if (preg_match('#/([^/]+)-' . preg_quote($brzProjectId, '#') . '\.lock$#', $lockFile, $matches)) {
+                        $mbUuid = $matches[1];
+                    }
+                }
+                
+                // Если не нашли в lock-файле, пытаемся найти в migration_result_list
+                if (!$mbUuid) {
+                    try {
+                        $dbService = new \Dashboard\Services\DatabaseService();
+                        $db = $dbService->getWriteConnection();
+                        $migrationResult = $db->find(
+                            'SELECT mb_project_uuid FROM migration_result_list WHERE brz_project_id = ? LIMIT 1',
+                            [$brzProjectId]
+                        );
+                        
+                        if ($migrationResult && isset($migrationResult['mb_project_uuid'])) {
+                            $mbUuid = $migrationResult['mb_project_uuid'];
+                        }
+                    } catch (Exception $e) {
+                        // Игнорируем ошибки БД
+                    }
+                }
             }
-
-            if (!$mbUuid) {
-                $mbUuid = $this->resolveMbUuidFromLockOrDb($brzProjectId);
-            }
-
+            
+            // Если mbUuid все еще не найден, возвращаем ошибку
             if (!$mbUuid) {
                 return new JsonResponse([
                     'success' => false,
                     'error' => 'Миграция не найдена. Не удалось определить mb_project_uuid для brz_project_id: ' . $brzProjectId,
+                    'debug' => [
+                        'brz_project_id' => $brzProjectId,
+                        'cache_path' => $cachePath ?? null,
+                        'lock_files_found' => count($lockFiles ?? [])
+                    ]
                 ], 404);
             }
 
-            // 1. Опрос сервера миграции (основной источник)
-            $serverResult = $this->apiProxy->getMigrationStatusFromServer($mbUuid, $brzProjectId);
-            if ($serverResult['success'] && !empty($serverResult['data'])) {
-                $data = $serverResult['data'];
-                $status = $data['status'] ?? 'pending';
-                $running = in_array($status, ['in_progress', 'running'], true);
-                $progress = $data['progress'] ?? [];
-
-                $statusUpdated = false;
-                if (in_array($status, ['completed', 'success', 'error', 'failed'], true)) {
-                    $this->migrationService->syncMigrationStatusFromServer($mbUuid, $brzProjectId, $data);
-                    $statusUpdated = true;
-                }
-
-                $process = [
-                    'running' => $running,
-                    'pid' => null,
-                    'message' => $running ? 'Статус с сервера миграции: выполняется' : 'Статус с сервера миграции: ' . $status,
-                    'detected_by' => 'migration_server_api',
-                    'started_at' => $data['started_at'] ?? null,
-                    'current_stage' => $progress['current_stage'] ?? null,
-                    'stage_updated_at' => $data['updated_at'] ?? null,
-                    'total_pages' => $progress['total_pages'] ?? null,
-                    'processed_pages' => $progress['processed_pages'] ?? null,
-                    'progress_percent' => $progress['progress_percent'] ?? null,
-                    'current_page_slug' => $progress['current_page_slug'] ?? null,
-                ];
-
-                return new JsonResponse([
-                    'success' => true,
-                    'data' => [
-                        'success' => true,
-                        'lock_file_exists' => false,
-                        'lock_file' => null,
-                        'process' => $process,
-                        'source' => 'migration_server_api',
-                        'status_updated' => $statusUpdated,
-                    ]
-                ], 200);
-            }
-
-            // 2. Fallback: локальный мониторинг (lock-файл, процесс)
             $result = $this->migrationService->getMigrationProcessInfo($mbUuid, $brzProjectId);
-            $result['source'] = 'lock_file';
 
             return new JsonResponse([
                 'success' => $result['success'],
@@ -739,23 +753,6 @@ class MigrationController
                 'error' => $e->getMessage()
             ], 500);
         }
-    }
-
-    /**
-     * Найти mb_project_uuid по brz_project_id через lock-файл или migration_result_list.
-     */
-    private function resolveMbUuidFromLockOrDb(int $brzProjectId): ?string
-    {
-        $projectRoot = dirname(__DIR__, 3);
-        $cachePath = $_ENV['CACHE_PATH'] ?? getenv('CACHE_PATH') ?: $projectRoot . '/var/cache';
-        $lockFilePattern = $cachePath . '/*-' . $brzProjectId . '.lock';
-        $lockFiles = glob($lockFilePattern);
-        if (!empty($lockFiles) && preg_match('#/([^/]+)-' . preg_quote((string)$brzProjectId, '#') . '\.lock$#', $lockFiles[0], $m)) {
-            return $m[1];
-        }
-        $db = (new \Dashboard\Services\DatabaseService())->getWriteConnection();
-        $row = $db->find('SELECT mb_project_uuid FROM migration_result_list WHERE brz_project_id = ? LIMIT 1', [$brzProjectId]);
-        return $row['mb_project_uuid'] ?? null;
     }
 
     /**
@@ -1111,57 +1108,6 @@ class MigrationController
                     'type' => get_class($e)
                 ]
             ], 500);
-        }
-    }
-
-    /**
-     * Читает последние N строк из файла без загрузки всего файла в память.
-     * Избегает эффекта «рекурсии»: file() на большом php-errors.log → memory limit → error_log → рост файла.
-     *
-     * @param string $filePath Путь к файлу
-     * @param int $numLines Количество последних строк
-     * @param int $maxBytes Максимум байт с конца файла для чтения (по умолчанию 1MB)
-     * @return string[]
-     */
-    private function readLastLines(string $filePath, int $numLines = 100, int $maxBytes = 1048576): array
-    {
-        $filePath = realpath($filePath);
-        if ($filePath === false || !is_readable($filePath)) {
-            return [];
-        }
-        $size = filesize($filePath);
-        if ($size === 0) {
-            return [];
-        }
-        $readSize = (int) min($maxBytes, $size);
-        $handle = @fopen($filePath, 'rb');
-        if ($handle === false) {
-            return [];
-        }
-        try {
-            if (fseek($handle, -$readSize, SEEK_END) !== 0) {
-                return [];
-            }
-            $chunk = fread($handle, $readSize);
-            fclose($handle);
-            if ($chunk === false || $chunk === '') {
-                return [];
-            }
-            $lines = explode("\n", $chunk);
-            $lines = array_filter($lines, static function ($l) {
-                return $l !== '';
-            });
-            $lines = array_values($lines);
-            // Если читали не с начала файла, первая строка может быть обрезана — пропускаем
-            if ($readSize < $size && count($lines) > 0) {
-                array_shift($lines);
-            }
-            return array_slice($lines, -$numLines);
-        } catch (\Throwable $e) {
-            if (is_resource($handle)) {
-                fclose($handle);
-            }
-            return [];
         }
     }
 }

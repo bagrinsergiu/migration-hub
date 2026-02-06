@@ -343,6 +343,7 @@ export default function Wave() {
                 <th>Workspace</th>
                 <th>Статус</th>
                 <th>Прогресс</th>
+                <th>Ревьюверы</th>
                 <th>Дата создания</th>
                 <th>Действия</th>
               </tr>
@@ -391,6 +392,13 @@ export default function Wave() {
                           />
                         </div>
                       </div>
+                    </td>
+                    <td>
+                      {wave.reviewers_display ? (
+                        <span title={wave.reviewers_display}>{wave.reviewers_display}</span>
+                      ) : (
+                        <span style={{ color: '#9ca3af' }}>—</span>
+                      )}
                     </td>
                     <td>{formatDate(wave.created_at)}</td>
                     <td>

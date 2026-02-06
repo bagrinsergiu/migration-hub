@@ -21,9 +21,6 @@ class WaveService
     /** @var DatabaseService */
     private $dbService;
 
-    /** In-memory cache for wave details: [ key => ['data' => array, 'expires' => timestamp ] ] */
-    private static $waveDetailsCache = [];
-
     public function __construct()
     {
         $this->dbService = new DatabaseService();
@@ -607,42 +604,84 @@ class WaveService
      */
     public function getWavesList(): array
     {
-        return $this->dbService->getWavesList();
+        $waves = $this->dbService->getWavesList();
+        
+        // Добавляем ревьюверов для каждой волны (с обработкой ошибок)
+        try {
+            $migrationService = new MigrationService();
+            foreach ($waves as &$wave) {
+                $waveId = $wave['id'] ?? $wave['wave_id'] ?? null;
+                if ($waveId) {
+                    try {
+                        $reviewers = $migrationService->getReviewersByWave($waveId);
+                        $wave['reviewers'] = $reviewers;
+                        // Формируем строку ревьюверов для отображения
+                        if (!empty($reviewers)) {
+                            $reviewerNames = array_column($reviewers, 'person_brizy');
+                            $wave['reviewers_display'] = implode(', ', array_filter($reviewerNames));
+                        } else {
+                            $wave['reviewers_display'] = null;
+                        }
+                    } catch (Exception $e) {
+                        // Если ошибка при получении ревьюверов, просто пропускаем их
+                        error_log("Ошибка получения ревьюверов для волны {$waveId}: " . $e->getMessage());
+                        $wave['reviewers'] = [];
+                        $wave['reviewers_display'] = null;
+                    }
+                } else {
+                    $wave['reviewers'] = [];
+                    $wave['reviewers_display'] = null;
+                }
+            }
+            unset($wave);
+        } catch (Exception $e) {
+            // Если критическая ошибка, логируем, но возвращаем волны без ревьюверов
+            error_log("Критическая ошибка при получении ревьюверов: " . $e->getMessage());
+            foreach ($waves as &$wave) {
+                $wave['reviewers'] = [];
+                $wave['reviewers_display'] = null;
+            }
+            unset($wave);
+        }
+        
+        return $waves;
     }
 
+    /**
+     * Получить детали волны
+     * 
+     * @param string $waveId ID волны
+     * @return array|null
+     * @throws Exception
+     */
     public function getWaveDetails(string $waveId): ?array
     {
-        // Краткий кэш (2 сек), чтобы снизить нагрузку при опросе с фронта
-        $cacheKey = 'wave_details_' . $waveId;
-        $cached = self::getWaveDetailsCache($cacheKey);
-        if ($cached !== null) {
-            return $cached;
-        }
-
         $wave = $this->dbService->getWave($waveId);
-
+        
         if (!$wave) {
             return null;
         }
 
+        // КРИТИЧНО: Обновляем статусы миграций на основе lock-файлов и процессов
+        $this->updateMigrationStatusesFromMonitoring($waveId);
+
         $migrations = $this->dbService->getWaveMigrations($waveId);
-
-        // Обновление статусов по lock/процессам только для активных волн
-        $status = $wave['status'] ?? 'pending';
-        if ($status === 'in_progress' || $status === 'pending') {
-            $this->updateMigrationStatusesFromMonitoring($waveId, $migrations);
-            $migrations = $this->dbService->getWaveMigrations($waveId);
+        
+        // Добавляем ревьюверов для волны
+        $migrationService = new MigrationService();
+        $reviewers = $migrationService->getReviewersByWave($waveId);
+        $wave['reviewers'] = $reviewers;
+        if (!empty($reviewers)) {
+            $reviewerNames = array_column($reviewers, 'person_brizy');
+            $wave['reviewers_display'] = implode(', ', $reviewerNames);
+        } else {
+            $wave['reviewers_display'] = null;
         }
-
-        $sheets = $this->getWaveSheets($waveId);
-        $wave['sheets'] = $sheets;
-
-        $result = [
+        
+        return [
             'wave' => $wave,
             'migrations' => $migrations,
         ];
-        self::setWaveDetailsCache($cacheKey, $result, 2);
-        return $result;
     }
     
     /**
@@ -651,37 +690,10 @@ class WaveService
      * @param string $waveId ID волны
      * @return void
      */
-    private static function getWaveDetailsCache(string $key): ?array
-    {
-        if (!isset(self::$waveDetailsCache[$key])) {
-            return null;
-        }
-        $entry = self::$waveDetailsCache[$key];
-        if ($entry['expires'] < time()) {
-            unset(self::$waveDetailsCache[$key]);
-            return null;
-        }
-        return $entry['data'];
-    }
-
-    private static function setWaveDetailsCache(string $key, array $data, int $ttlSeconds): void
-    {
-        self::$waveDetailsCache[$key] = [
-            'data' => $data,
-            'expires' => time() + $ttlSeconds,
-        ];
-    }
-
-    /**
-     * @param string $waveId
-     * @param array|null $migrations Предзагруженный список миграций (избегаем лишнего getWaveMigrations)
-     */
-    private function updateMigrationStatusesFromMonitoring(string $waveId, ?array $migrations = null): void
+    private function updateMigrationStatusesFromMonitoring(string $waveId): void
     {
         try {
-            if ($migrations === null) {
-                $migrations = $this->dbService->getWaveMigrations($waveId);
-            }
+            $migrations = $this->dbService->getWaveMigrations($waveId);
             if (empty($migrations)) {
                 return;
             }
@@ -951,11 +963,9 @@ class WaveService
      */
     public function restartMigrationInWave(string $waveId, string $mbUuid, array $params = []): array
     {
-        error_log('[MIG] WaveService::restartMigrationInWave — START waveId=' . $waveId . ', mbUuid=' . $mbUuid);
         $wave = $this->dbService->getWave($waveId);
         
         if (!$wave) {
-            error_log('[MIG] WaveService::restartMigrationInWave — ошибка: волна не найдена');
             throw new Exception('Волна не найдена');
         }
 
@@ -1009,41 +1019,23 @@ class WaveService
                 );
             }
             
-            // Создаем проект в workspace через Brizy API
+            // Создаем проект в workspace
             $brizyApi = $this->getBrizyApiService();
             $projectName = 'Project_' . $mbUuid;
-            $createResult = $brizyApi->createProject($projectName, $workspaceId, 'id');
-            $brzProjectId = $this->normalizeProjectIdFromApi($createResult, $brizyApi, $workspaceId, $projectName);
-            if (!$brzProjectId || $brzProjectId <= 0) {
-                throw new Exception('Не удалось создать проект в workspace (Brizy API)');
+            $brzProjectId = $brizyApi->createProject($projectName, $workspaceId, 'id');
+            
+            if (!$brzProjectId) {
+                throw new Exception('Не удалось создать проект в workspace');
             }
-            // Обновляем/создаём запись в migration_result_list с новым brz_project_id
-            $this->dbService->upsertMigrationResult($waveId, $mbUuid, [
+            
+            // Обновляем запись в migration_result_list с новым brz_project_id (но еще не in_progress)
+            $this->dbService->updateMigrationResult($waveId, $mbUuid, [
                 'brz_project_id' => $brzProjectId,
                 'result_json' => [
                     'status' => 'pending',
                     'message' => 'Проект создан, подготовка к миграции'
                 ]
             ]);
-            // Обновляем таблицу migrations (чтобы brz_project_id был везде)
-            try {
-                $this->dbService->saveMigration([
-                    'wave_id' => $waveId,
-                    'migration_uuid' => $waveId,
-                    'mb_project_uuid' => $mbUuid,
-                    'brz_project_id' => $brzProjectId,
-                    'status' => 'pending',
-                    'result_json' => json_encode(['status' => 'pending', 'message' => 'Проект создан, подготовка к миграции']),
-                ]);
-            } catch (\Throwable $e) {
-                error_log("[WaveService::restartMigrationInWave] Ошибка обновления таблицы migrations: " . $e->getMessage());
-            }
-            // Маппинг mb_uuid <-> brz_project_id для остальных сервисов
-            try {
-                $this->dbService->upsertMigrationMapping($brzProjectId, $mbUuid, ['status' => 'pending']);
-            } catch (\Throwable $e) {
-                error_log("[WaveService::restartMigrationInWave] Ошибка обновления migrations_mapping: " . $e->getMessage());
-            }
         }
 
         // Загружаем настройки по умолчанию
@@ -1055,108 +1047,236 @@ class WaveService
             throw new Exception('mb_site_id и mb_secret должны быть указаны либо в запросе, либо в настройках');
         }
 
-        // Запускаем миграцию через сервер миграции (HTTP + webhook), как при старте волны
-        $migrationParams = [
-            'mb_project_uuid' => $mbUuid,
-            'brz_project_id' => $brzProjectId,
-            'brz_workspaces_id' => $workspaceId,
+        // Формируем контекст для ApplicationBootstrapper
+        $context = $this->buildApplicationContext();
+        
+        // Выполняем миграцию синхронно (для перезапуска)
+        $request = \Symfony\Component\HttpFoundation\Request::create('/', 'GET', [
             'mb_site_id' => $mbSiteId,
-            'mb_secret' => $mbSecret,
-            'mgr_manual' => (!empty($wave['mgr_manual'])) ? 1 : 0,
-            'quality_analysis' => !empty($params['quality_analysis']),
-            'wave_id' => $waveId,
-        ];
+            'mb_secret' => $mbSecret
+        ]);
+        $app = new \MBMigration\ApplicationBootstrapper($context, $request);
 
         try {
-            error_log('[MIG] WaveService::restartMigrationInWave — вызываем MigrationExecutionService::executeMigration');
-            $executionService = new MigrationExecutionService();
-            $runResult = $executionService->executeMigration($migrationParams);
-            error_log('[MIG] WaveService::restartMigrationInWave — executeMigration вернул: success=' . (isset($runResult['success']) && $runResult['success'] ? 'true' : 'false') . ', http_code=' . ($runResult['http_code'] ?? 'n/a'));
+            // Инициализируем Config перед выполнением миграции
+            $app->doInnitConfig();
+            
+            // Обновляем статус на in_progress только когда миграция реально начинается
+            $this->dbService->updateMigrationResult($waveId, $mbUuid, [
+                'result_json' => [
+                    'status' => 'in_progress',
+                    'message' => 'Миграция запущена',
+                    'started_at' => date('Y-m-d H:i:s')
+                ]
+            ]);
+
+            // Сохраняем запись о начале миграции в таблицу migrations
+            try {
+                $this->dbService->saveMigration([
+                    'migration_uuid' => $waveId,
+                    'brz_project_id' => $brzProjectId > 0 ? $brzProjectId : null,
+                    'mb_project_uuid' => $mbUuid,
+                    'status' => 'in_progress',
+                    'wave_id' => $waveId,
+                    'started_at' => date('Y-m-d H:i:s'),
+                    'result_json' => json_encode(['status' => 'in_progress', 'message' => 'Миграция запущена'])
+                ]);
+            } catch (Exception $saveError) {
+                error_log("Ошибка сохранения начала миграции в таблицу migrations: " . $saveError->getMessage());
+            }
+            
+            $result = $app->migrationFlow(
+                $mbUuid,
+                $brzProjectId,
+                $workspaceId,
+                '',
+                false,
+                $wave['mgr_manual']
+            );
+
+            // Сохраняем данные о страницах в page_quality_analysis даже без анализа качества
+            // Это нужно для отображения страниц во вкладке "Страницы"
+            try {
+                $pageList = $app->getPageList();
+                if (!empty($pageList) && isset($result['brizy_project_id'])) {
+                    $qualityReport = new \MBMigration\Analysis\QualityReport();
+                    $mbProjectDomain = $result['mb_project_domain'] ?? null;
+                    $brizyProjectDomain = $result['brizy_project_domain'] ?? null;
+                    
+                    foreach ($pageList as $page) {
+                        $pageSlug = $page['slug'] ?? null;
+                        if (empty($pageSlug)) {
+                            continue;
+                        }
+                        
+                        // Формируем URLs для страницы
+                        $sourceUrl = null;
+                        $migratedUrl = null;
+                        
+                        if ($mbProjectDomain) {
+                            $sourceUrl = rtrim($mbProjectDomain, '/') . '/' . ltrim($pageSlug, '/');
+                        }
+                        
+                        if ($brizyProjectDomain) {
+                            $migratedUrl = rtrim($brizyProjectDomain, '/') . '/' . ltrim($pageSlug, '/');
+                        }
+                        
+                        // Сохраняем базовую запись о странице без анализа качества
+                        $qualityReport->saveReport([
+                            'migration_id' => (int)$result['brizy_project_id'],
+                            'mb_project_uuid' => $mbUuid,
+                            'page_slug' => $pageSlug,
+                            'source_url' => $sourceUrl,
+                            'migrated_url' => $migratedUrl,
+                            'analysis_status' => 'pending', // Статус "pending" означает, что анализ не был выполнен
+                            'quality_score' => null,
+                            'severity_level' => 'none',
+                            'issues_summary' => [],
+                            'detailed_report' => [],
+                            'screenshots_path' => json_encode([])
+                        ]);
+                    }
+                }
+            } catch (\Exception $e) {
+                // Логируем ошибку, но не прерываем выполнение миграции
+                error_log("Ошибка сохранения данных о страницах: " . $e->getMessage());
+            }
+
+            // Обновляем статус миграции в волне
+            $migrations = $wave['migrations'];
+            $migrationIndex = array_search($mbUuid, array_column($migrations, 'mb_project_uuid'));
+            
+            if ($migrationIndex !== false) {
+                $migrations[$migrationIndex]['status'] = 'completed';
+                $migrations[$migrationIndex]['brizy_project_domain'] = $result['brizy_project_domain'] ?? null;
+                $migrations[$migrationIndex]['completed_at'] = date('Y-m-d H:i:s');
+                unset($migrations[$migrationIndex]['error']);
+            }
+
+            $progress = $wave['progress'];
+            if ($migration['status'] === 'error') {
+                $progress['failed'] = max(0, $progress['failed'] - 1);
+            }
+            if ($migration['status'] !== 'completed') {
+                $progress['completed']++;
+            }
+
+            $this->dbService->updateWaveProgress($waveId, $progress, $migrations);
+
+            // Сохраняем результат в новую таблицу migrations
+            $finalBrzProjectId = $result['brizy_project_id'] ?? $brzProjectId;
+            try {
+                $this->dbService->saveMigration([
+                    'migration_uuid' => $waveId,
+                    'brz_project_id' => $finalBrzProjectId,
+                    'brizy_project_domain' => $result['brizy_project_domain'] ?? null,
+                    'mb_project_uuid' => $mbUuid,
+                    'mb_project_domain' => $result['mb_project_domain'] ?? null,
+                    'status' => 'completed',
+                    'mb_site_id' => $result['mb_site_id'] ?? null,
+                    'mb_product_name' => $result['mb_product_name'] ?? null,
+                    'theme' => $result['theme'] ?? null,
+                    'migration_id' => $result['migration_id'] ?? null,
+                    'date' => $result['date'] ?? date('Y-m-d'),
+                    'wave_id' => $waveId,
+                    'result_json' => json_encode($result),
+                    'completed_at' => date('Y-m-d H:i:s')
+                ]);
+            } catch (Exception $e) {
+                error_log("Ошибка сохранения миграции в новую таблицу: " . $e->getMessage());
+            }
+
+            // Сохраняем в migrations_mapping ТОЛЬКО для волн (это специальная таблица для маппинга волн)
+            // brz_project_id - это ID проекта бризи (мигрированный проект)
+            // mb_project_uuid - это UUID проекта MB (исходный проект)
+            $this->dbService->upsertMigrationMapping($finalBrzProjectId, $mbUuid, [
+                'status' => 'completed',
+                'brizy_project_domain' => $result['brizy_project_domain'] ?? null,
+                'brizy_project_id' => $finalBrzProjectId,
+                'completed_at' => date('Y-m-d H:i:s'),
+            ]);
+
+            // Автоматически включаем cloning_enabled при завершении миграции, если это указано в волне
+            try {
+                $wave = $this->dbService->getWave($waveId);
+                $enableCloning = $wave['enable_cloning'] ?? false;
+                
+                if ($enableCloning && $finalBrzProjectId > 0) {
+                    WaveLogger::info("Автоматическое включение cloning_enabled для проекта", [
+                        'wave_id' => $waveId,
+                        'brz_project_id' => $finalBrzProjectId,
+                        'mb_uuid' => $mbUuid
+                    ]);
+                    
+                    $this->updateCloningEnabled($finalBrzProjectId, true);
+                }
+            } catch (Exception $e) {
+                WaveLogger::warning("Ошибка при автоматическом включении cloning_enabled", [
+                    'wave_id' => $waveId,
+                    'brz_project_id' => $finalBrzProjectId,
+                    'error' => $e->getMessage()
+                ]);
+            }
+
+            // Обновляем запись в migration_result_list с результатами миграции (для обратной совместимости)
+            $this->dbService->updateMigrationResult($waveId, $mbUuid, [
+                'brz_project_id' => $finalBrzProjectId,
+                'brizy_project_domain' => $result['brizy_project_domain'] ?? '',
+                'result_json' => [
+                    'value' => $result,
+                    'status' => 'completed'
+                ]
+            ]);
+
+            return [
+                'success' => true,
+                'data' => $result,
+            ];
         } catch (Exception $e) {
-            error_log('[MIG] WaveService::restartMigrationInWave — исключение при executeMigration: ' . $e->getMessage());
+            // Сохраняем ошибку в таблицу migrations
+            try {
+                $this->dbService->saveMigration([
+                    'migration_uuid' => $waveId,
+                    'brz_project_id' => $brzProjectId > 0 ? $brzProjectId : null,
+                    'mb_project_uuid' => $mbUuid,
+                    'status' => 'error',
+                    'error' => $e->getMessage(),
+                    'wave_id' => $waveId,
+                    'result_json' => json_encode(['error' => $e->getMessage(), 'status' => 'error']),
+                    'completed_at' => date('Y-m-d H:i:s')
+                ]);
+            } catch (Exception $saveError) {
+                error_log("Ошибка сохранения миграции с ошибкой в таблицу migrations: " . $saveError->getMessage());
+            }
+
+            // Обновляем статус на error в migration_result_list
             $this->dbService->updateMigrationResult($waveId, $mbUuid, [
                 'result_json' => [
                     'status' => 'error',
                     'error' => $e->getMessage(),
-                    'message' => 'Ошибка запуска перезапуска миграции',
+                    'message' => 'Ошибка при выполнении миграции'
                 ]
             ]);
+
+            // Обновляем статус миграции в волне
+            $migrations = $wave['migrations'];
+            $migrationIndex = array_search($mbUuid, array_column($migrations, 'mb_project_uuid'));
+            
+            if ($migrationIndex !== false) {
+                $migrations[$migrationIndex]['status'] = 'error';
+                $migrations[$migrationIndex]['error'] = $e->getMessage();
+            }
+
+            $progress = $wave['progress'];
+            if ($migration['status'] === 'completed') {
+                $progress['completed'] = max(0, $progress['completed'] - 1);
+            }
+            $progress['failed']++;
+
+            $this->dbService->updateWaveProgress($waveId, $progress, $migrations);
+
             throw $e;
         }
-
-        // Обновляем статус на in_progress; итоговый результат придёт по веб-хуку
-        $this->dbService->updateMigrationResult($waveId, $mbUuid, [
-            'result_json' => [
-                'status' => 'in_progress',
-                'message' => 'Миграция перезапущена, выполняется на сервере миграции',
-                'started_at' => date('Y-m-d H:i:s'),
-            ]
-        ]);
-
-        try {
-            $this->dbService->saveMigration([
-                'migration_uuid' => $waveId,
-                'brz_project_id' => $brzProjectId > 0 ? $brzProjectId : null,
-                'mb_project_uuid' => $mbUuid,
-                'status' => 'in_progress',
-                'wave_id' => $waveId,
-                'started_at' => date('Y-m-d H:i:s'),
-                'result_json' => json_encode(['status' => 'in_progress', 'message' => 'Миграция перезапущена']),
-            ]);
-        } catch (Exception $saveError) {
-            error_log("Ошибка сохранения начала миграции в таблицу migrations: " . $saveError->getMessage());
-        }
-
-        return [
-            'success' => (bool)($runResult['success'] ?? false),
-            'data' => [
-                'status' => 'in_progress',
-                'message' => $runResult['message'] ?? 'Миграция перезапущена',
-                'mb_project_uuid' => $mbUuid,
-                'brz_project_id' => $brzProjectId,
-            ],
-        ];
-    }
-
-    /**
-     * Сбросить статус волны и всех миграций в ней на pending.
-     * Позволяет разблокировать перезапуск, если волна застряла в in_progress или error.
-     *
-     * @param string $waveId ID волны
-     * @return array
-     * @throws Exception
-     */
-    public function resetWaveStatus(string $waveId): array
-    {
-        $wave = $this->dbService->getWave($waveId);
-        if (!$wave) {
-            throw new Exception('Волна не найдена');
-        }
-
-        $migrations = $this->dbService->getWaveMigrations($waveId);
-        $total = count($migrations);
-
-        $migrationsPending = [];
-        foreach ($migrations as $m) {
-            $migrationsPending[] = [
-                'mb_project_uuid' => $m['mb_project_uuid'],
-                'brz_project_id' => $m['brz_project_id'] ?? 0,
-                'status' => 'pending',
-            ];
-        }
-
-        $progress = [
-            'total' => $total,
-            'completed' => 0,
-            'failed' => 0,
-        ];
-        $this->dbService->updateWaveProgress($waveId, $progress, $migrationsPending, 'pending');
-
-        return [
-            'success' => true,
-            'message' => 'Статус волны и всех миграций сброшен на «ожидание». Можно перезапустить миграции.',
-            'wave_status' => 'pending',
-        ];
     }
 
     /**
@@ -1282,17 +1402,14 @@ class WaveService
             error_log("[WaveService::restartAllMigrationsInWave] ОШИБКА при обновлении статуса волны: " . $e->getMessage());
         }
 
-        // Очищаем кэш, lock-файлы и сбрасываем статус для каждой миграции; собираем массив для executeBatch
+        // Очищаем кэш, lock-файлы и сбрасываем статус для каждой миграции (быстро, без запуска миграций)
         error_log("[WaveService::restartAllMigrationsInWave] Начало обработки " . count($migrations) . " миграций...");
-        $migrationsArray = [];
-        $batchSize = (int)($wave['batch_size'] ?? 3);
-
         foreach ($migrations as $index => $migration) {
             $mbUuid = $migration['mb_project_uuid'];
-            $brzProjectId = (int)($migration['brz_project_id'] ?? 0);
-
+            $brzProjectId = $migration['brz_project_id'] ?? 0;
+            
             error_log("[WaveService::restartAllMigrationsInWave] Обработка миграции " . ($index + 1) . "/" . count($migrations) . ": mbUuid={$mbUuid}, brzProjectId={$brzProjectId}");
-
+            
             $detail = [
                 'mb_uuid' => $mbUuid,
                 'brz_project_id' => $brzProjectId,
@@ -1304,38 +1421,9 @@ class WaveService
             ];
 
             try {
-                // Если проекта ещё нет — создаём в workspace через Brizy API и обновляем таблицы
-                if ($brzProjectId <= 0) {
-                    try {
-                        $brizyApi = $this->getBrizyApiService();
-                        $projectName = 'Project_' . $mbUuid;
-                        $createResult = $brizyApi->createProject($projectName, $workspaceId, 'id');
-                        $brzProjectId = $this->normalizeProjectIdFromApi($createResult, $brizyApi, $workspaceId, $projectName);
-                        if ($brzProjectId > 0) {
-                            $this->dbService->upsertMigrationResult($waveId, $mbUuid, [
-                                'brz_project_id' => $brzProjectId,
-                                'result_json' => ['status' => 'pending', 'message' => 'Проект создан, подготовка к миграции'],
-                            ]);
-                            $this->dbService->saveMigration([
-                                'wave_id' => $waveId,
-                                'migration_uuid' => $waveId,
-                                'mb_project_uuid' => $mbUuid,
-                                'brz_project_id' => $brzProjectId,
-                                'status' => 'pending',
-                                'result_json' => json_encode(['status' => 'pending', 'message' => 'Проект создан']),
-                            ]);
-                            $this->dbService->upsertMigrationMapping($brzProjectId, $mbUuid, ['status' => 'pending']);
-                            $detail['brz_project_id'] = $brzProjectId;
-                        }
-                    } catch (Exception $e) {
-                        error_log("[WaveService::restartAllMigrationsInWave] Ошибка создания проекта для {$mbUuid}: " . $e->getMessage());
-                        throw $e;
-                    }
-                    if ($brzProjectId <= 0) {
-                        throw new Exception('Не удалось создать проект в workspace (Brizy API)');
-                    }
-                }
+                // Если проект уже создан, очищаем кэш и lock-файлы
                 if ($brzProjectId > 0) {
+                    // 1. Удаляем lock-файл
                     try {
                         $lockResult = $migrationService->removeMigrationLock($mbUuid, $brzProjectId);
                         if ($lockResult['success']) {
@@ -1344,47 +1432,67 @@ class WaveService
                     } catch (Exception $e) {
                         $detail['error'] = 'Ошибка удаления lock-файла: ' . $e->getMessage();
                     }
+
+                    // 2. Удаляем кэш-файл
                     try {
                         $cacheResult = $migrationService->removeMigrationCache($mbUuid, $brzProjectId);
                         if ($cacheResult['success']) {
                             $detail['cache_cleared'] = $cacheResult['removed'] ?? false;
                         }
                     } catch (Exception $e) {
-                        $detail['error'] = ($detail['error'] ?? '') . '; Ошибка удаления кэша: ' . $e->getMessage();
+                        if ($detail['error']) {
+                            $detail['error'] .= '; Ошибка удаления кэша: ' . $e->getMessage();
+                        } else {
+                            $detail['error'] = 'Ошибка удаления кэша: ' . $e->getMessage();
+                        }
                     }
+
+                    // 3. Сбрасываем статус в БД
                     try {
                         $statusResult = $migrationService->resetMigrationStatus($mbUuid, $brzProjectId);
                         if ($statusResult['success']) {
                             $detail['status_reset'] = true;
                         }
                     } catch (Exception $e) {
-                        $detail['error'] = ($detail['error'] ?? '') . '; Ошибка сброса статуса: ' . $e->getMessage();
+                        if ($detail['error']) {
+                            $detail['error'] .= '; Ошибка сброса статуса: ' . $e->getMessage();
+                        } else {
+                            $detail['error'] = 'Ошибка сброса статуса: ' . $e->getMessage();
+                        }
                     }
                 }
 
-                $this->dbService->updateMigrationResult($waveId, $mbUuid, [
-                    'result_json' => [
-                        'status' => 'pending',
-                        'message' => 'Подготовка к перезапуску миграции'
-                    ]
-                ]);
+                // 4. Сбрасываем статус в migration_result_list на pending
+                try {
+                    $this->dbService->updateMigrationResult($waveId, $mbUuid, [
+                        'result_json' => [
+                            'status' => 'pending',
+                            'message' => 'Подготовка к перезапуску миграции'
+                        ]
+                    ]);
+                } catch (Exception $e) {
+                    error_log("Ошибка обновления migration_result_list для $mbUuid: " . $e->getMessage());
+                }
 
-                $migrationsArray[] = [
-                    'mb_project_uuid' => $mbUuid,
-                    'brz_project_id' => $brzProjectId,
-                    'brz_workspaces_id' => $workspaceId,
-                    'mb_site_id' => $mbSiteId,
-                    'mb_secret' => $mbSecret,
-                    'mgr_manual' => (!empty($wave['mgr_manual'])) ? 1 : 0,
-                    'quality_analysis' => !empty($params['quality_analysis']),
-                    'wave_id' => $waveId,
-                ];
-                $results['details'][] = $detail;
+                // 5. Запускаем миграцию в фоне через отдельный процесс
+                error_log("[WaveService::restartAllMigrationsInWave] Запуск миграции в фоне: mbUuid={$mbUuid}, brzProjectId={$brzProjectId}");
+                try {
+                    $this->startMigrationInBackground($waveId, $mbUuid, $brzProjectId, $workspaceId, $mbSiteId, $mbSecret, $params);
+                    error_log("[WaveService::restartAllMigrationsInWave] Миграция успешно запущена в фоне: mbUuid={$mbUuid}");
+                    $detail['restarted'] = true;
+                    $results['success']++;
+                } catch (Exception $startError) {
+                    error_log("[WaveService::restartAllMigrationsInWave] ОШИБКА при запуске миграции в фоне: mbUuid={$mbUuid}, error=" . $startError->getMessage());
+                    $detail['error'] = ($detail['error'] ? $detail['error'] . '; ' : '') . 'Ошибка запуска миграции: ' . $startError->getMessage();
+                    $results['failed']++;
+                }
+
             } catch (Exception $e) {
-                error_log("[WaveService::restartAllMigrationsInWave] ОШИБКА при подготовке миграции mbUuid={$mbUuid}: " . $e->getMessage());
+                error_log("[WaveService::restartAllMigrationsInWave] ОШИБКА при обработке миграции mbUuid={$mbUuid}: " . $e->getMessage());
+                error_log("[WaveService::restartAllMigrationsInWave] Stack trace: " . $e->getTraceAsString());
                 $detail['error'] = $e->getMessage();
                 $results['failed']++;
-                $results['details'][] = $detail;
+                // Обновляем статус на error при ошибке
                 try {
                     $this->dbService->updateMigrationResult($waveId, $mbUuid, [
                         'result_json' => [
@@ -1397,76 +1505,12 @@ class WaveService
                     error_log("Ошибка обновления статуса на error для $mbUuid: " . $updateError->getMessage());
                 }
             }
-            $results['processed']++;
-        }
 
-        // Запускаем все миграции одним батчем через сервер миграции (с веб-хуком)
-        if (!empty($migrationsArray)) {
-            try {
-                $executionService = new MigrationExecutionService();
-                $batchResult = $executionService->executeBatch($migrationsArray, $batchSize);
-                foreach ($batchResult['results'] ?? [] as $resultIndex => $migrationResult) {
-                    $isSuccess = $migrationResult['success'] ?? false;
-                    $mbUuid = $migrationResult['migration']['mb_project_uuid'] ?? null;
-                    if (!$mbUuid) {
-                        continue;
-                    }
-                    if ($isSuccess) {
-                        $this->dbService->updateMigrationResult($waveId, $mbUuid, [
-                            'result_json' => [
-                                'status' => 'in_progress',
-                                'message' => 'Миграция перезапущена, выполняется на сервере миграции',
-                                'started_at' => date('Y-m-d H:i:s'),
-                            ]
-                        ]);
-                        $results['success']++;
-                        foreach ($results['details'] as &$d) {
-                            if (($d['mb_uuid'] ?? '') === $mbUuid) {
-                                $d['restarted'] = true;
-                                break;
-                            }
-                        }
-                        unset($d);
-                    } else {
-                        $errorMsg = $migrationResult['error'] ?? $migrationResult['message'] ?? 'Ошибка запуска';
-                        $this->dbService->updateMigrationResult($waveId, $mbUuid, [
-                            'result_json' => [
-                                'status' => 'error',
-                                'error' => $errorMsg,
-                                'message' => 'Ошибка при перезапуске миграции',
-                            ]
-                        ]);
-                        $results['failed']++;
-                        foreach ($results['details'] as &$d) {
-                            if (($d['mb_uuid'] ?? '') === $mbUuid) {
-                                $d['error'] = ($d['error'] ?? '') . '; ' . $errorMsg;
-                                break;
-                            }
-                        }
-                        unset($d);
-                    }
-                }
-            } catch (Exception $e) {
-                error_log("[WaveService::restartAllMigrationsInWave] ОШИБКА executeBatch: " . $e->getMessage());
-                foreach ($migrationsArray as $m) {
-                    $mbUuid = $m['mb_project_uuid'] ?? null;
-                    if ($mbUuid) {
-                        $this->dbService->updateMigrationResult($waveId, $mbUuid, [
-                            'result_json' => [
-                                'status' => 'error',
-                                'error' => $e->getMessage(),
-                                'message' => 'Ошибка при перезапуске миграции',
-                            ]
-                        ]);
-                    }
-                    $results['failed']++;
-                }
-                $results['success'] = 0;
-            }
+            $results['processed']++;
+            $results['details'][] = $detail;
         }
 
         error_log("[WaveService::restartAllMigrationsInWave] Массовый перезапуск завершен: total=" . $results['total'] . ", success=" . $results['success'] . ", failed=" . $results['failed'] . ", processed=" . $results['processed']);
-
         
         return [
             'success' => $results['failed'] === 0,
@@ -1479,23 +1523,6 @@ class WaveService
             ),
             'results' => $results
         ];
-    }
-
-
-    /**
-     * Нормализует ID проекта из ответа Brizy API (число, строка или массив с полем id).
-     * При необходимости запрашивает getProject по имени.
-     */
-    private function normalizeProjectIdFromApi($createResult, BrizyApiService $brizyApi, int $workspaceId, string $projectName): int
-    {
-        if (is_numeric($createResult)) {
-            return (int)$createResult;
-        }
-        if (is_array($createResult) && isset($createResult['id'])) {
-            return (int)$createResult['id'];
-        }
-        $existing = $brizyApi->getProject($workspaceId, $projectName);
-        return $existing ? (int)$existing : 0;
     }
 
     /**
@@ -2251,149 +2278,5 @@ class WaveService
             'AWS_REGION' => $_ENV['AWS_REGION'] ?? getenv('AWS_REGION') ?: '',
             'AWS_BUCKET' => $_ENV['AWS_BUCKET'] ?? getenv('AWS_BUCKET') ?: '',
         ];
-    }
-
-    /**
-     * Получить все Google Sheets листы, привязанные к волне
-     * 
-     * @param string $waveId ID волны
-     * @return array Массив листов с информацией (spreadsheet_id, sheet_name, last_synced_at)
-     * @throws Exception
-     */
-    public function getWaveSheets(string $waveId): array
-    {
-        try {
-            $googleSheetsService = new GoogleSheetsService();
-            return $googleSheetsService->getSheetsByWave($waveId);
-        } catch (Exception $e) {
-            // Если GoogleSheetsService не инициализирован или ошибка, возвращаем пустой массив
-            error_log("[WaveService::getWaveSheets] Ошибка получения листов для волны {$waveId}: " . $e->getMessage());
-            return [];
-        }
-    }
-
-    /**
-     * Синхронизировать данные волны из привязанных Google Sheets
-     * 
-     * @param string $waveId ID волны
-     * @return array Статистика синхронизации
-     * @throws Exception
-     */
-    public function syncWaveFromSheets(string $waveId): array
-    {
-        try {
-            // Получаем все привязанные листы
-            $sheets = $this->getWaveSheets($waveId);
-            
-            if (empty($sheets)) {
-                return [
-                    'success' => true,
-                    'message' => 'Нет привязанных листов для синхронизации',
-                    'sheets_count' => 0,
-                    'synced' => 0,
-                    'failed' => 0,
-                    'total_rows' => 0,
-                    'total_processed' => 0,
-                    'total_created' => 0,
-                    'total_updated' => 0,
-                    'total_not_found' => 0,
-                    'total_errors' => 0
-                ];
-            }
-            
-            // Инициализируем сервис синхронизации
-            $syncService = new GoogleSheetsSyncService();
-            
-            // Статистика
-            $totalStats = [
-                'sheets_count' => count($sheets),
-                'synced' => 0,
-                'failed' => 0,
-                'total_rows' => 0,
-                'total_processed' => 0,
-                'total_created' => 0,
-                'total_updated' => 0,
-                'total_not_found' => 0,
-                'total_errors' => 0,
-                'sheets' => []
-            ];
-            
-            // Синхронизируем каждый лист
-            foreach ($sheets as $sheet) {
-                try {
-                    $stats = $syncService->syncSheet(
-                        $sheet['spreadsheet_id'],
-                        $sheet['sheet_name'],
-                        $waveId
-                    );
-                    
-                    $stats['sheet_id'] = $sheet['id'];
-                    $stats['sheet_name'] = $sheet['sheet_name'];
-                    $totalStats['sheets'][] = $stats;
-                    
-                    $totalStats['synced']++;
-                    $totalStats['total_rows'] += $stats['total_rows'];
-                    $totalStats['total_processed'] += $stats['processed'];
-                    $totalStats['total_created'] += $stats['created'];
-                    $totalStats['total_updated'] += $stats['updated'];
-                    $totalStats['total_not_found'] += $stats['not_found'];
-                    $totalStats['total_errors'] += $stats['errors'];
-                    
-                } catch (Exception $e) {
-                    $totalStats['failed']++;
-                    $totalStats['sheets'][] = [
-                        'sheet_id' => $sheet['id'],
-                        'sheet_name' => $sheet['sheet_name'],
-                        'error' => $e->getMessage()
-                    ];
-                    error_log("[WaveService::syncWaveFromSheets] Ошибка синхронизации листа ID={$sheet['id']}: " . $e->getMessage());
-                    // Продолжаем синхронизацию других листов
-                }
-            }
-            
-            return [
-                'success' => true,
-                'message' => "Синхронизировано {$totalStats['synced']} из {$totalStats['sheets_count']} листов",
-                ...$totalStats
-            ];
-            
-        } catch (Exception $e) {
-            error_log("[WaveService::syncWaveFromSheets] Критическая ошибка для волны {$waveId}: " . $e->getMessage());
-            throw new Exception('Ошибка синхронизации волны из Google Sheets: ' . $e->getMessage());
-        }
-    }
-
-    /**
-     * Привязать лист к волне
-     * 
-     * @param string $waveId ID волны
-     * @param string $spreadsheetId ID Google таблицы
-     * @param string $sheetName Название листа
-     * @return array Информация о привязке
-     * @throws Exception
-     */
-    public function linkWaveToSheet(string $waveId, string $spreadsheetId, string $sheetName): array
-    {
-        try {
-            // Проверяем существование волны
-            $wave = $this->dbService->getWave($waveId);
-            if (!$wave) {
-                throw new Exception("Волна с ID '{$waveId}' не найдена");
-            }
-            
-            // Используем GoogleSheetsService для привязки
-            $googleSheetsService = new GoogleSheetsService();
-            $result = $googleSheetsService->linkSheetToWave($spreadsheetId, $sheetName, $waveId);
-            
-            return [
-                'success' => true,
-                'message' => "Лист '{$sheetName}' успешно привязан к волне '{$wave['name']}'",
-                'data' => $result
-            ];
-            
-        } catch (Exception $e) {
-            error_log("[WaveService::linkWaveToSheet] Ошибка привязки листа к волне {$waveId}: " . $e->getMessage());
-            throw $e;
-        }
     }
 }

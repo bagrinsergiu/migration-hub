@@ -14,10 +14,6 @@ class WaveReviewService
     /** @var DatabaseService */
     private $dbService;
 
-    /** Кэш validateToken: [ token => ['wave_id' => string, 'expires' => timestamp ] ] */
-    private static $validateTokenCache = [];
-    private const VALIDATE_TOKEN_CACHE_TTL = 10;
-
     public function __construct()
     {
         $this->dbService = new DatabaseService();
@@ -96,29 +92,28 @@ class WaveReviewService
         ];
     }
 
+    /**
+     * Проверить валидность токена и получить wave_id
+     * 
+     * @param string $token
+     * @return string|null Wave ID или null если токен невалиден
+     * @throws Exception
+     */
     public function validateToken(string $token): ?string
     {
         if (empty($token)) {
             return null;
         }
-        $cacheKey = $token;
-        if (isset(self::$validateTokenCache[$cacheKey]) && self::$validateTokenCache[$cacheKey]['expires'] >= time()) {
-            return self::$validateTokenCache[$cacheKey]['wave_id'];
-        }
 
         $db = $this->dbService->getWriteConnection();
-
-        $sql = "SELECT wave_id FROM wave_review_tokens
-                WHERE token = ? AND is_active = 1
+        
+        $sql = "SELECT wave_id FROM wave_review_tokens 
+                WHERE token = ? AND is_active = 1 
                 AND (expires_at IS NULL OR expires_at > NOW())";
-
+        
         $result = $db->find($sql, [$token]);
-
+        
         if ($result) {
-            self::$validateTokenCache[$cacheKey] = [
-                'wave_id' => $result['wave_id'],
-                'expires' => time() + self::VALIDATE_TOKEN_CACHE_TTL,
-            ];
             return $result['wave_id'];
         }
 
@@ -152,38 +147,6 @@ class WaveReviewService
         }
 
         return null;
-    }
-
-    /**
-     * Получить настройки доступа для нескольких проектов одним запросом (оптимизация для списка миграций).
-     *
-     * @param string $token
-     * @param string[] $mbUuids
-     * @return array [ mb_uuid => ['allowed_tabs' => array, 'is_active' => bool], ... ]
-     */
-    public function getProjectAccessBatch(string $token, array $mbUuids): array
-    {
-        if (empty($mbUuids)) {
-            return [];
-        }
-
-        $db = $this->dbService->getWriteConnection();
-        $placeholders = implode(',', array_fill(0, count($mbUuids), '?'));
-        $params = array_merge([$token], $mbUuids);
-        $sql = "SELECT tp.mb_uuid, tp.allowed_tabs, tp.is_active
-                FROM wave_review_token_projects tp
-                INNER JOIN wave_review_tokens t ON tp.token_id = t.id
-                WHERE t.token = ? AND tp.mb_uuid IN ($placeholders) AND tp.is_active = 1";
-
-        $rows = $db->getAllRows($sql, $params);
-        $map = [];
-        foreach ($rows as $row) {
-            $map[$row['mb_uuid']] = [
-                'allowed_tabs' => $row['allowed_tabs'] ? json_decode($row['allowed_tabs'], true) : [],
-                'is_active' => (bool)$row['is_active'],
-            ];
-        }
-        return $map;
     }
 
     /**
@@ -482,39 +445,5 @@ class WaveReviewService
         );
         
         return $review ?: null;
-    }
-
-    public function getProjectReviewsByToken(string $token): array
-    {
-        $tokenInfo = $this->getTokenInfo($token);
-        if (!$tokenInfo) {
-            return [];
-        }
-        return $this->getProjectReviewsByTokenId((int)$tokenInfo['id']);
-    }
-
-    /**
-     * Получить все ревью проектов по token_id (без повторного запроса getTokenInfo).
-     *
-     * @param int $tokenId
-     * @return array [brz_project_id => [review_status, reviewed_at, ...], ...]
-     */
-    public function getProjectReviewsByTokenId(int $tokenId): array
-    {
-        $db = $this->dbService->getWriteConnection();
-        $rows = $db->getAllRows(
-            'SELECT brz_project_id, review_status, reviewed_at, comment FROM project_reviews WHERE token_id = ?',
-            [$tokenId]
-        );
-
-        $map = [];
-        foreach ($rows as $row) {
-            $map[(int)$row['brz_project_id']] = [
-                'review_status' => $row['review_status'],
-                'reviewed_at' => $row['reviewed_at'],
-                'comment' => $row['comment'] ?? null,
-            ];
-        }
-        return $map;
     }
 }

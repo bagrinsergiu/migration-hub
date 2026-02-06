@@ -155,13 +155,11 @@ export default function WaveReview() {
     return details.migrations.filter((migration) => {
       // Фильтр по поисковому запросу
       const searchLower = searchTerm.toLowerCase();
-      const reviewerName = (migration as any).reviewer?.person_brizy?.toLowerCase() || '';
       const matchesSearch = 
         !searchTerm ||
         migration.mb_project_uuid?.toLowerCase().includes(searchLower) ||
         migration.brizy_project_domain?.toLowerCase().includes(searchLower) ||
-        migration.brz_project_id?.toString().includes(searchLower) ||
-        reviewerName.includes(searchLower);
+        migration.brz_project_id?.toString().includes(searchLower);
       
       // Фильтр по статусу
       const matchesStatus = 
@@ -182,44 +180,9 @@ export default function WaveReview() {
   // Условные возвраты ПОСЛЕ всех хуков
   if (loading) {
     return (
-      <div className="wave-review-page wave-review-skeleton">
-        <div className="review-header">
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', width: '100%' }}>
-            <div className="skeleton skeleton-title" style={{ width: 320, height: 32 }} />
-            <div style={{ display: 'flex', gap: '1rem' }}>
-              <div className="skeleton" style={{ width: 40, height: 32 }} />
-              <div className="skeleton" style={{ width: 40, height: 32 }} />
-            </div>
-          </div>
-          <div className="review-info" style={{ marginTop: '1rem' }}>
-            <div className="skeleton skeleton-badge" style={{ width: 100, height: 24 }} />
-            <div className="skeleton" style={{ width: 180, height: 20 }} />
-          </div>
-        </div>
-        <div className="review-content">
-          <div className="wave-summary">
-            {[1, 2, 3].map((i) => (
-              <div key={i} className="summary-item">
-                <div className="skeleton" style={{ width: 100, height: 18 }} />
-                <div className="skeleton" style={{ width: 200, height: 18 }} />
-              </div>
-            ))}
-          </div>
-          <div className="projects-section">
-            <div className="projects-header">
-              <div className="skeleton" style={{ width: 220, height: 24 }} />
-              <div className="skeleton" style={{ width: 280, height: 36 }} />
-            </div>
-            <div className="skeleton skeleton-table">
-              <div className="skeleton-line" />
-              <div className="skeleton-line" />
-              <div className="skeleton-line" />
-              <div className="skeleton-line" />
-              <div className="skeleton-line" />
-            </div>
-          </div>
-        </div>
-        <p className="skeleton-loading-text">{t('loading')}</p>
+      <div className="loading-container">
+        <div className="spinner"></div>
+        <p>{t('loading')}</p>
       </div>
     );
   }
@@ -332,13 +295,11 @@ export default function WaveReview() {
                 <thead>
                   <tr>
                     <th>{t('domain')}</th>
-                    <th>{t('reviewer')}</th>
                     <th>{t('mbUuid')}</th>
                     <th>{t('brizyProjectId')}</th>
                     <th>{t('status')}</th>
                     <th>{t('progress')}</th>
                     <th>{t('completed')}</th>
-                    <th>{t('reviewReady')}</th>
                     <th>{t('errors')}</th>
                     <th>{t('back')}</th>
                   </tr>
@@ -371,15 +332,6 @@ export default function WaveReview() {
                             <span className="no-domain">—</span>
                           )}
                         </td>
-                        <td>
-                          {(migration as any).reviewer?.person_brizy ? (
-                            <span title={(migration as any).reviewer?.uuid}>
-                              {(migration as any).reviewer.person_brizy}
-                            </span>
-                          ) : (
-                            '—'
-                          )}
-                        </td>
                         <td className="uuid-cell">{formatUUID(migration.mb_project_uuid)}</td>
                         <td>{migration.brz_project_id && migration.brz_project_id !== 0 ? migration.brz_project_id : '—'}</td>
                         <td>
@@ -404,34 +356,6 @@ export default function WaveReview() {
                           )}
                         </td>
                         <td>{migration.completed_at ? formatDate(migration.completed_at) : '—'}</td>
-                        <td>
-                          {(() => {
-                            const pr = (migration as any).project_review;
-                            const status = pr?.review_status;
-                            if (!pr || status === 'pending') return '—';
-                            const statusLabels: Record<string, string> = {
-                              approved: t('approved'),
-                              rejected: t('rejected'),
-                              needs_changes: t('needsChanges'),
-                            };
-                            const statusColors: Record<string, { color: string; bg: string }> = {
-                              approved: { color: '#059669', bg: '#d1fae5' },
-                              rejected: { color: '#dc2626', bg: '#fee2e2' },
-                              needs_changes: { color: '#d97706', bg: '#ffedd5' },
-                            };
-                            const cfg = statusColors[status] || { color: '#6b7280', bg: '#f3f4f6' };
-                            const label = statusLabels[status] || status;
-                            return (
-                              <span
-                                className="status-badge"
-                                style={{ color: cfg.color, backgroundColor: cfg.bg }}
-                                title={pr.reviewed_at ? `${t('reviewReady')} ${formatDate(pr.reviewed_at)}` : t('reviewReady')}
-                              >
-                                ✓ {label}
-                              </span>
-                            );
-                          })()}
-                        </td>
                         <td>
                           {migration.error ? (
                             <span className="error-text" title={migration.error}>

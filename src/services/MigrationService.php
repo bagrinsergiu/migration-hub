@@ -33,25 +33,25 @@ class MigrationService
      * @return array
      * @throws Exception
      */
-    public function getMigrationsList(array $filters = [], ?int $limit = 1000): array
+    public function getMigrationsList(array $filters = []): array
     {
-        $mappings = $this->dbService->getMigrationsList($limit);
-        $results = $this->dbService->getMigrationResults($limit ?: 1000);
+        $mappings = $this->dbService->getMigrationsList();
+        $results = $this->dbService->getMigrationResults(1000);
 
-        // Индекс результатов по (mb_uuid, brz_id) для O(1) поиска вместо O(n) в цикле
-        $resultIndex = [];
-        foreach ($results as $res) {
-            $key = $res['mb_project_uuid'] . '|' . $res['brz_project_id'];
-            if (!isset($resultIndex[$key])) {
-                $resultIndex[$key] = $res;
-            }
-        }
-
+        // Объединяем данные
         $migrations = [];
         foreach ($mappings as $mapping) {
             $mbUuid = $mapping['mb_project_uuid'];
             $brzId = $mapping['brz_project_id'];
-            $result = $resultIndex[$mbUuid . '|' . $brzId] ?? null;
+
+            // Ищем результат миграции
+            $result = null;
+            foreach ($results as $res) {
+                if ($res['mb_project_uuid'] === $mbUuid && $res['brz_project_id'] == $brzId) {
+                    $result = $res;
+                    break;
+                }
+            }
 
             $resultData = $result ? json_decode($result['result_json'] ?? '{}', true) : null;
             
@@ -184,7 +184,6 @@ class MigrationService
      */
     public function runMigration(array $params): array
     {
-        error_log('[MIG] MigrationService::runMigration — вход: mb_project_uuid=' . ($params['mb_project_uuid'] ?? '') . ', brz_project_id=' . ($params['brz_project_id'] ?? ''));
         // Получаем настройки по умолчанию
         $defaultSettings = $this->dbService->getSettings();
         
@@ -202,10 +201,8 @@ class MigrationService
         $mbProjectUuid = $params['mb_project_uuid'] ?? '';
         
         try {
-            error_log('[MIG] MigrationService::runMigration — вызываем ApiProxyService::runMigration');
             // Запускаем через прокси
             $result = $this->apiProxy->runMigration($params);
-            error_log('[MIG] MigrationService::runMigration — ответ прокси: success=' . (isset($result['success']) && $result['success'] ? 'true' : 'false') . ', http_code=' . ($result['http_code'] ?? 'n/a'));
             
             // Проверяем, что результат содержит необходимые данные
             if (!isset($result['success']) || !isset($result['data'])) {
@@ -382,22 +379,6 @@ class MigrationService
                         $changesJson
                     );
                     
-                    if ($migrationCompleted) {
-                        $url = $changesJson['brizy_project_domain'] ?? null;
-                        if (empty($url)) {
-                            $result = $this->dbService->getMigrationResultByUuid($mbUuid);
-                            $url = $result['brizy_project_domain'] ?? null;
-                        }
-                        if (!empty($url)) {
-                            try {
-                                $googleSheetsService = new GoogleSheetsService();
-                                $googleSheetsService->updateWebsiteBrizyForMigration($mbUuid, $url);
-                            } catch (Exception $e) {
-                                error_log("[MigrationService::checkAndUpdateStaleStatus] updateWebsiteBrizyForMigration: " . $e->getMessage());
-                            }
-                        }
-                    }
-                    
                     return true;
                 } catch (Exception $e) {
                     error_log("Ошибка автоматического обновления статуса: " . $e->getMessage());
@@ -450,11 +431,10 @@ class MigrationService
             $migrationValue = $resultData['value'] ?? $resultData;
         }
         
-        // Получаем информацию о ревьюере
+        // Получаем ревьюера, если есть migration_id
         $reviewer = null;
-        $migrationId = $this->getMigrationIdFromBrzProjectId($brzProjectId);
-        if ($migrationId) {
-            $reviewer = $this->getMigrationReviewer($migrationId);
+        if (isset($mapping['migration_id']) && $mapping['migration_id']) {
+            $reviewer = $this->getMigrationReviewer((int)$mapping['migration_id']);
         }
         
         return [
@@ -470,59 +450,8 @@ class MigrationService
             'mb_project_domain' => $migrationValue['mb_project_domain'] ?? $resultData['mb_project_domain'] ?? $changesJson['mb_project_domain'] ?? null,
             'progress' => $migrationValue['progress'] ?? $resultData['progress'] ?? null,
             'warnings' => $migrationValue['message']['warning'] ?? $resultData['message']['warning'] ?? [],
-            'reviewer' => $reviewer, // Информация о ревьюере
+            'reviewer' => $reviewer, // Добавляем ревьюера
         ];
-    }
-
-    /**
-     * Синхронизировать статус миграции из ответа сервера миграции (при опросе API).
-     * Обновляет migrations_mapping, чтобы getMigrationDetails показывал актуальный статус.
-     *
-     * @param string $mbUuid
-     * @param int $brzProjectId
-     * @param array $serverData Ответ GET /migration-status (status, progress, started_at, completed_at, error и т.д.)
-     */
-    public function syncMigrationStatusFromServer(string $mbUuid, int $brzProjectId, array $serverData): void
-    {
-        $mapping = $this->dbService->getMigrationById($brzProjectId);
-        if (!$mapping) {
-            return;
-        }
-
-        $changesJson = [];
-        if (!empty($mapping['changes_json'])) {
-            $changesJson = is_string($mapping['changes_json'])
-                ? json_decode($mapping['changes_json'], true)
-                : $mapping['changes_json'];
-            if (!is_array($changesJson)) {
-                $changesJson = [];
-            }
-        }
-
-        $status = $serverData['status'] ?? $changesJson['status'] ?? 'pending';
-        if ($status === 'success') {
-            $status = 'completed';
-        }
-        if (in_array($status, ['failed'], true)) {
-            $status = 'error';
-        }
-
-        $changesJson['status'] = $status;
-        $changesJson['updated_at'] = date('Y-m-d H:i:s');
-        if (!empty($serverData['progress']) && is_array($serverData['progress'])) {
-            $changesJson['progress'] = $serverData['progress'];
-        }
-        if (array_key_exists('error', $serverData) && $serverData['error'] !== null && $serverData['error'] !== '') {
-            $changesJson['error'] = is_string($serverData['error']) ? $serverData['error'] : json_encode($serverData['error']);
-        }
-        if (!empty($serverData['completed_at'])) {
-            $changesJson['completed_at'] = $serverData['completed_at'];
-        }
-        if (in_array($status, ['completed', 'error'], true) && empty($changesJson['completed_at'])) {
-            $changesJson['completed_at'] = date('Y-m-d H:i:s');
-        }
-
-        $this->dbService->upsertMigrationMapping($brzProjectId, $mbUuid, $changesJson);
     }
 
     /**
@@ -1710,120 +1639,68 @@ class MigrationService
     }
 
     /**
-     * Получить ID миграции из таблицы migrations по brz_project_id
-     * 
-     * @param int $brzProjectId
-     * @return int|null
-     * @throws Exception
-     */
-    private function getMigrationIdFromBrzProjectId(int $brzProjectId): ?int
-    {
-        try {
-            $db = $this->dbService->getWriteConnection();
-            $migration = $db->find(
-                'SELECT id FROM migrations WHERE brz_project_id = ? ORDER BY created_at DESC LIMIT 1',
-                [$brzProjectId]
-            );
-            return $migration ? (int)$migration['id'] : null;
-        } catch (Exception $e) {
-            // Если таблица migrations не существует или ошибка, возвращаем null
-            return null;
-        }
-    }
-
-    /**
-     * Получить информацию о ревьюере для конкретной миграции
+     * Получить ревьюера для конкретной миграции
      * 
      * @param int $migrationId ID миграции из таблицы migrations
-     * @return array|null Объект с полями person_brizy, uuid или null, если ревьюер не назначен
+     * @return array|null Объект с полями person_brizy, uuid или null
      * @throws Exception
      */
     public function getMigrationReviewer(int $migrationId): ?array
     {
         try {
             $db = $this->dbService->getWriteConnection();
+            
             $reviewer = $db->find(
                 'SELECT person_brizy, uuid FROM migration_reviewers WHERE migration_id = ? LIMIT 1',
                 [$migrationId]
             );
             
-            if (!$reviewer) {
-                return null;
-            }
-            
-            return [
-                'person_brizy' => $reviewer['person_brizy'],
-                'uuid' => $reviewer['uuid']
-            ];
+            return $reviewer ?: null;
         } catch (Exception $e) {
-            // Если таблица migration_reviewers не существует, возвращаем null
-            if (strpos($e->getMessage(), "doesn't exist") !== false || 
-                strpos($e->getMessage(), "Table") !== false) {
-                return null;
-            }
-            throw $e;
+            error_log("Ошибка получения ревьюера миграции: " . $e->getMessage());
+            return null;
         }
     }
 
     /**
      * Получить список миграций с информацией о ревьюерах
      * 
-     * @param array $filters Фильтры (как в getMigrationsList)
+     * @param array $filters Фильтры для миграций
      * @return array Массив миграций с полем reviewer
      * @throws Exception
      */
     public function getMigrationsWithReviewers(array $filters = []): array
     {
-        // Получаем список миграций
         $migrations = $this->getMigrationsList($filters);
         
-        if (empty($migrations)) {
-            return [];
-        }
+        // Получаем ревьюверов для всех миграций
+        $db = $this->dbService->getWriteConnection();
         
         // Получаем все migration_id из списка миграций
-        $db = $this->dbService->getWriteConnection();
-        $brzProjectIds = array_column($migrations, 'brz_project_id');
-        $brzProjectIds = array_filter($brzProjectIds);
-        
-        if (empty($brzProjectIds)) {
-            // Если нет brz_project_id, просто возвращаем миграции без ревьюеров
-            foreach ($migrations as &$migration) {
-                $migration['reviewer'] = null;
+        $migrationIds = [];
+        foreach ($migrations as $migration) {
+            if (isset($migration['migration_id']) && $migration['migration_id']) {
+                $migrationIds[] = (int)$migration['migration_id'];
             }
-            return $migrations;
         }
         
-        // Получаем все migration_id для этих brz_project_id
-        $placeholders = implode(',', array_fill(0, count($brzProjectIds), '?'));
-        $migrationsFromTable = $db->getAllRows(
-            "SELECT id, brz_project_id FROM migrations WHERE brz_project_id IN ($placeholders)",
-            $brzProjectIds
-        );
-        
-        // Создаем индекс: brz_project_id => migration_id
-        $migrationIdMap = [];
-        foreach ($migrationsFromTable as $migration) {
-            $migrationIdMap[$migration['brz_project_id']] = $migration['id'];
-        }
-        
-        // Получаем все ревьюеры для найденных migration_id
-        $migrationIds = array_values($migrationIdMap);
         if (empty($migrationIds)) {
-            // Если нет migration_id, просто возвращаем миграции без ревьюеров
+            // Если нет migration_id, возвращаем миграции без ревьюверов
             foreach ($migrations as &$migration) {
                 $migration['reviewer'] = null;
             }
+            unset($migration);
             return $migrations;
         }
         
-        $reviewersPlaceholders = implode(',', array_fill(0, count($migrationIds), '?'));
+        // Получаем всех ревьюверов одним запросом
+        $placeholders = implode(',', array_fill(0, count($migrationIds), '?'));
         $reviewers = $db->getAllRows(
-            "SELECT migration_id, person_brizy, uuid FROM migration_reviewers WHERE migration_id IN ($reviewersPlaceholders)",
+            "SELECT migration_id, person_brizy, uuid FROM migration_reviewers WHERE migration_id IN ($placeholders)",
             $migrationIds
         );
         
-        // Создаем индекс: migration_id => reviewer
+        // Создаем массив ревьюверов по migration_id
         $reviewersMap = [];
         foreach ($reviewers as $reviewer) {
             $reviewersMap[$reviewer['migration_id']] = [
@@ -1832,16 +1709,16 @@ class MigrationService
             ];
         }
         
-        // Добавляем информацию о ревьюерах к миграциям
+        // Добавляем ревьюверов к миграциям
         foreach ($migrations as &$migration) {
-            $brzProjectId = $migration['brz_project_id'] ?? null;
-            if ($brzProjectId && isset($migrationIdMap[$brzProjectId])) {
-                $migrationId = $migrationIdMap[$brzProjectId];
-                $migration['reviewer'] = $reviewersMap[$migrationId] ?? null;
+            $migrationId = $migration['migration_id'] ?? null;
+            if ($migrationId && isset($reviewersMap[$migrationId])) {
+                $migration['reviewer'] = $reviewersMap[$migrationId];
             } else {
                 $migration['reviewer'] = null;
             }
         }
+        unset($migration);
         
         return $migrations;
     }
@@ -1858,34 +1735,54 @@ class MigrationService
         try {
             $db = $this->dbService->getWriteConnection();
             
-            // Получаем все миграции волны с ревьюерами
-            $reviewers = $db->getAllRows(
-                'SELECT mr.person_brizy, mr.uuid, COUNT(DISTINCT mr.migration_id) as migration_count
-                 FROM migration_reviewers mr
-                 INNER JOIN migrations m ON mr.migration_id = m.id
-                 WHERE m.wave_id = ?
-                 GROUP BY mr.person_brizy, mr.uuid
-                 ORDER BY migration_count DESC, mr.person_brizy ASC',
-                [$waveId]
-            );
+            // Проверяем, существует ли таблица migration_reviewers
+            // Пропускаем проверку и просто пытаемся выполнить запрос
+            // Если таблица не существует, вернется пустой массив
             
-            $result = [];
-            foreach ($reviewers as $reviewer) {
-                $result[] = [
-                    'person_brizy' => $reviewer['person_brizy'],
-                    'uuid' => $reviewer['uuid'],
-                    'migration_count' => (int)$reviewer['migration_count']
-                ];
-            }
-            
-            return $result;
-        } catch (Exception $e) {
-            // Если таблица migration_reviewers не существует, возвращаем пустой массив
-            if (strpos($e->getMessage(), "doesn't exist") !== false || 
-                strpos($e->getMessage(), "Table") !== false) {
+            // Получаем все миграции в волне
+            try {
+                $migrations = $db->getAllRows(
+                    'SELECT id FROM migrations WHERE wave_id = ?',
+                    [$waveId]
+                );
+            } catch (Exception $e) {
+                // Если таблица migrations не имеет колонки wave_id или другой ошибки
+                error_log("Ошибка получения миграций для волны {$waveId}: " . $e->getMessage());
                 return [];
             }
-            throw $e;
+            
+            if (empty($migrations)) {
+                return [];
+            }
+            
+            $migrationIds = array_column($migrations, 'id');
+            if (empty($migrationIds)) {
+                return [];
+            }
+            
+            // Получаем всех ревьюверов для миграций в волне
+            $placeholders = implode(',', array_fill(0, count($migrationIds), '?'));
+            try {
+                $reviewers = $db->getAllRows(
+                    "SELECT person_brizy, COUNT(*) as migrations_count 
+                     FROM migration_reviewers 
+                     WHERE migration_id IN ($placeholders) 
+                     AND person_brizy IS NOT NULL 
+                     AND person_brizy != ''
+                     GROUP BY person_brizy
+                     ORDER BY migrations_count DESC",
+                    $migrationIds
+                );
+                
+                return $reviewers;
+            } catch (Exception $e) {
+                error_log("Ошибка получения ревьюверов из migration_reviewers: " . $e->getMessage());
+                return [];
+            }
+        } catch (Exception $e) {
+            error_log("Ошибка получения ревьюеров по волне {$waveId}: " . $e->getMessage());
+            return [];
         }
     }
+
 }

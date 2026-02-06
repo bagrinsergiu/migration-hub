@@ -4,11 +4,9 @@
 /var/cache/*
 /var/log/*
 /var/tmp/*
-/var/screenshots/*
 !/var/cache/.gitkeep
 !/var/log/.gitkeep
 !/var/tmp/.gitkeep
-!/var/screenshots/.gitkeep
 /frontend/dist/
 /frontend/node_modules/
 /.idea/

@@ -4,8 +4,8 @@
  * Доступен по адресу: http://localhost:8088/api/*
  */
 
-// Определяем корень проекта (если вызвано из public/index.php — используется DASHBOARD_PROJECT_ROOT)
-$projectRoot = defined('DASHBOARD_PROJECT_ROOT') ? DASHBOARD_PROJECT_ROOT : dirname(__DIR__);
+// Определяем корень проекта
+$projectRoot = dirname(__DIR__);
 
 // Сначала загружаем автозагрузчик Composer (нужен для Dotenv)
 require_once $projectRoot . '/vendor/autoload.php';
@@ -108,10 +108,10 @@ set_exception_handler(function($exception) use ($debugMode) {
 // Автозагрузчик уже загружен выше
 // Переменные окружения уже загружены выше
 
-// Логирование роутера только в режиме отладки (снижает нагрузку на прод)
-if (php_sapi_name() !== 'cli' && $debugMode) {
+// ВРЕМЕННЫЙ ТЕСТ: проверяем, вызывается ли роутер
+if (php_sapi_name() !== 'cli') {
     file_put_contents('php://stderr', "[Router] Router file loaded\n");
-    error_log("[Router] REQUEST_URI: " . ($_SERVER['REQUEST_URI'] ?? 'not set'));
+    error_log("[Router] Router file loaded, REQUEST_URI: " . ($_SERVER['REQUEST_URI'] ?? 'not set'));
 }
 
 // Инициализация Config
@@ -152,9 +152,7 @@ $classesToLoad = [
     'Dashboard\\Services\\WaveReviewService' => __DIR__ . '/services/WaveReviewService.php',
     'Dashboard\\Services\\UserService' => __DIR__ . '/services/UserService.php',
     'Dashboard\\Services\\GoogleSheetsService' => __DIR__ . '/services/GoogleSheetsService.php',
-    'Dashboard\\Services\\GoogleSheetsSyncService' => __DIR__ . '/services/GoogleSheetsSyncService.php',
     'Dashboard\\Services\\BrizyApiService' => __DIR__ . '/services/BrizyApiService.php',
-    'Dashboard\\Services\\ScreenshotService' => __DIR__ . '/services/ScreenshotService.php',
     'Dashboard\\Core\\BrizyConfig' => __DIR__ . '/Core/BrizyConfig.php',
     'Dashboard\\Controllers\\MigrationController' => __DIR__ . '/controllers/MigrationController.php',
     'Dashboard\\Controllers\\LogController' => __DIR__ . '/controllers/LogController.php',
@@ -192,11 +190,14 @@ use Symfony\Component\HttpFoundation\Request;
 use Symfony\Component\HttpFoundation\Response;
 
 return function (array $context, Request $request) use ($debugMode): Response {
-    if ($debugMode) {
-        file_put_contents('php://stderr', "[Router] Request: " . $request->getMethod() . " " . $request->getRequestUri() . "\n");
-        error_log("[Router] " . $request->getMethod() . " " . $request->getRequestUri());
-    }
-
+    // Логируем начало выполнения роутера
+    file_put_contents('php://stderr', "[Router] Router function called\n");
+    file_put_contents('php://stderr', "[Router] Request URI: " . $request->getRequestUri() . "\n");
+    file_put_contents('php://stderr', "[Router] Request method: " . $request->getMethod() . "\n");
+    error_log("[Router] Router function called");
+    error_log("[Router] Request URI: " . $request->getRequestUri());
+    error_log("[Router] Request method: " . $request->getMethod());
+    
     // Handle preflight requests
     if ($request->getMethod() === 'OPTIONS') {
         $response = new Response('', 200);
@@ -239,6 +240,7 @@ return function (array $context, Request $request) use ($debugMode): Response {
                 '/api/migrations/:id' => 'GET - Детали миграции',
                 '/api/migrations/run' => 'POST - Запуск миграции',
                 '/api/migrations/:id/restart' => 'POST - Перезапуск миграции',
+                '/api/migrations/:id/status' => 'GET - Статус миграции',
                 '/api/migrations/:id/lock' => 'DELETE - Удалить lock-файл миграции',
                 '/api/migrations/:id/kill' => 'POST - Убить процесс миграции',
                 '/api/migrations/:id/process' => 'GET - Информация о процессе миграции (мониторинг)',
@@ -251,7 +253,6 @@ return function (array $context, Request $request) use ($debugMode): Response {
                 '/api/waves' => 'GET/POST - Список волн / Создать волну',
                 '/api/waves/:id' => 'GET - Детали волны',
                 '/api/waves/:id/status' => 'GET - Статус волны',
-                '/api/waves/:id/reset-status' => 'POST - Сбросить статус волны и миграций на pending',
                 '/api/waves/:id/restart-all' => 'POST - Массовый перезапуск всех миграций в волне',
                 '/api/waves/:id/migrations/:mb_uuid/restart' => 'POST - Перезапустить миграцию в волне',
                 '/api/waves/:id/logs' => 'GET - Логи волны',
@@ -397,29 +398,19 @@ return function (array $context, Request $request) use ($debugMode): Response {
                 if ($waveResponse->getStatusCode() === 200) {
                     $waveData = json_decode($waveResponse->getContent(), true);
                     if ($waveData && $waveData['success']) {
-                        // Добавляем настройки доступа и статус ревью для каждого проекта
+                        // Добавляем настройки доступа для каждого проекта
                         if (isset($waveData['data']['migrations']) && is_array($waveData['data']['migrations'])) {
-                            $reviewsByProject = $reviewService->getProjectReviewsByTokenId((int)$tokenInfo['id']);
-                            $mbUuids = [];
-                            foreach ($waveData['data']['migrations'] as $m) {
-                                $uuid = $m['mb_uuid'] ?? $m['mb_project_uuid'] ?? null;
-                                if ($uuid) {
-                                    $mbUuids[] = $uuid;
-                                }
-                            }
-                            $accessByUuid = $reviewService->getProjectAccessBatch($token, array_unique($mbUuids));
                             foreach ($waveData['data']['migrations'] as &$migration) {
+                                // Проверяем оба возможных ключа для UUID
                                 $mbUuid = $migration['mb_uuid'] ?? $migration['mb_project_uuid'] ?? null;
                                 if ($mbUuid) {
-                                    $migration['review_access'] = $accessByUuid[$mbUuid] ?? null;
+                                    $projectAccess = $reviewService->getProjectAccess($token, $mbUuid);
+                                    // Если нет индивидуальных настроек, проект доступен по умолчанию
+                                    // Устанавливаем review_access только если есть настройки, иначе null (что означает доступ по умолчанию)
+                                    $migration['review_access'] = $projectAccess;
                                 } else {
+                                    // Если нет UUID, проект недоступен
                                     $migration['review_access'] = ['is_active' => false];
-                                }
-                                $brzProjectId = $migration['brz_project_id'] ?? $migration['result_data']['brizy_project_id'] ?? null;
-                                if ($brzProjectId) {
-                                    $migration['project_review'] = $reviewsByProject[(int)$brzProjectId] ?? null;
-                                } else {
-                                    $migration['project_review'] = null;
                                 }
                             }
                             unset($migration);
@@ -1319,6 +1310,14 @@ return function (array $context, Request $request) use ($debugMode): Response {
             }
         }
 
+        if (preg_match('#^/migrations/(\d+)/status$#', $apiPath, $matches)) {
+            if ($request->getMethod() === 'GET') {
+                $id = (int)$matches[1];
+                $controller = new MigrationController();
+                return $controller->getStatus($id);
+            }
+        }
+
         if (preg_match('#^/migrations/(\d+)/status-from-server$#', $apiPath, $matches)) {
             if ($request->getMethod() === 'GET') {
                 $id = (int)$matches[1];
@@ -1530,101 +1529,78 @@ return function (array $context, Request $request) use ($debugMode): Response {
             }
         }
 
-        // Прямой доступ к скриншотам по имени файла (без mb_uuid в URL)
+        // Прямой доступ к скриншотам по имени файла
         if (preg_match('#^/screenshots/(.+)$#', $apiPath, $matches)) {
             if ($request->getMethod() === 'GET') {
                 $filename = basename($matches[1]);
-                // Корень проекта: при пустом projectRoot используем каталог этого файла (src/index.php)
-                $root = $projectRoot;
-                if ($root === null || $root === '') {
-                    $root = dirname(__DIR__);
-                }
-                if (is_dir($root)) {
-                    $resolved = realpath($root);
-                    if ($resolved !== false) {
-                        $root = $resolved;
-                    }
-                }
-                $screenshotsWebhookDir = rtrim($root, '/') . '/var/screenshots/';
-                $screenshotsTmpDir = rtrim($root, '/') . '/var/tmp/';
-
+                // Ищем файл в var/tmp/project_*/ директориях
+                // Используем реальный путь к проекту из текущего файла
+                $currentFile = __FILE__; // /home/sg/projects/MB-migration/dashboard/api/index.php
+                $projectRoot = dirname(dirname(dirname($currentFile))); // Поднимаемся на 3 уровня
+                $screenshotsDir = $projectRoot . '/var/tmp/';
+                
+                // Логируем для отладки
+                error_log("Screenshot request: filename=$filename, projectRoot=$projectRoot, screenshotsDir=$screenshotsDir");
+                
+                // Ищем файл во всех поддиректориях project_*
                 $found = false;
                 $filePath = null;
-                $checkedPaths = [];
-
-                // Всегда добавляем запасной корень по расположению src/index.php (работает при projectRoot=null)
-                $searchDirs = [$screenshotsWebhookDir];
-                $altRoot = dirname(__DIR__);
-                if ($altRoot !== $root && $altRoot !== null && $altRoot !== '') {
-                    $altResolved = is_dir($altRoot) ? realpath($altRoot) : false;
-                    if ($altResolved !== false) {
-                        $altScreenshots = rtrim($altResolved, '/') . '/var/screenshots/';
-                        if (!in_array($altScreenshots, $searchDirs, true)) {
-                            $searchDirs[] = $altScreenshots;
-                        }
-                    }
-                }
-
-                // 1) Ищем в var/screenshots/{mb_uuid}/ (файлы, загруженные через webhook)
-                foreach ($searchDirs as $searchDir) {
-                    if (!is_dir($searchDir)) {
-                        continue;
-                    }
-                    $uuidDirs = glob($searchDir . '*', GLOB_ONLYDIR) ?: [];
-                    foreach ($uuidDirs as $dir) {
-                        $potentialPath = $dir . '/' . $filename;
-                        $checkedPaths[] = $potentialPath;
-                        if (file_exists($potentialPath)) {
-                            $filePath = $potentialPath;
-                            $found = true;
-                            break 2;
-                        }
-                        $baseWithoutExt = pathinfo($filename, PATHINFO_FILENAME);
-                        $altMatches = glob($dir . '/' . $baseWithoutExt . '.*');
-                        if (!empty($altMatches) && file_exists($altMatches[0])) {
-                            $filePath = $altMatches[0];
-                            $found = true;
-                            break 2;
-                        }
-                    }
-                }
-
-                // 2) Ищем в var/tmp/project_*/
-                if (!$found && is_dir($screenshotsTmpDir)) {
-                    $dirs = glob($screenshotsTmpDir . 'project_*', GLOB_ONLYDIR);
+                $dirs = [];
+                
+                if (is_dir($screenshotsDir)) {
+                    $dirs = glob($screenshotsDir . 'project_*', GLOB_ONLYDIR);
+                    error_log("Found project dirs: " . json_encode($dirs));
+                    
                     foreach ($dirs as $dir) {
                         $potentialPath = $dir . '/' . $filename;
+                        error_log("Checking: $potentialPath, exists: " . (file_exists($potentialPath) ? 'YES' : 'NO'));
                         if (file_exists($potentialPath)) {
                             $filePath = $potentialPath;
                             $found = true;
                             break;
                         }
                     }
+                } else {
+                    error_log("Screenshots directory does not exist: $screenshotsDir");
                 }
-
-                // 3) Корень var/tmp/ (для старых записей)
-                if (!$found && is_dir($screenshotsTmpDir)) {
-                    $rootPath = $screenshotsTmpDir . $filename;
+                
+                // Если не нашли, пробуем поискать по полному пути (для старых записей)
+                if (!$found) {
+                    // Проверяем, может быть filename содержит путь
+                    if (strpos($filename, '/') !== false) {
+                        // Извлекаем только имя файла
+                        $actualFilename = basename($filename);
+                        foreach ($dirs as $dir) {
+                            $potentialPath = $dir . '/' . $actualFilename;
+                            if (file_exists($potentialPath)) {
+                                $filePath = $potentialPath;
+                                $found = true;
+                                break;
+                            }
+                        }
+                    }
+                }
+                
+                // Также проверяем корневую директорию var/tmp/ (для старых файлов)
+                if (!$found) {
+                    $rootPath = $screenshotsDir . $filename;
                     if (file_exists($rootPath)) {
                         $filePath = $rootPath;
                         $found = true;
                     }
                 }
-
+                
                 if (!$found || !$filePath) {
                     return new JsonResponse([
                         'success' => false,
                         'error' => 'Скриншот не найден: ' . $filename,
-                        'debug' => $debugMode ? [
+                        'debug' => [
                             'filename' => $filename,
-                            'screenshots_webhook_dir' => $screenshotsWebhookDir,
-                            'screenshots_tmp_dir' => $screenshotsTmpDir,
-                            'project_root' => $root,
-                            'webhook_dir_exists' => is_dir($screenshotsWebhookDir),
-                            'webhook_subdirs' => is_dir($screenshotsWebhookDir) ? glob($screenshotsWebhookDir . '*', GLOB_ONLYDIR) : [],
-                            'checked_paths' => $checkedPaths,
-                            'hint' => 'Файл отсутствует в перечисленных путях. Загрузите скриншот через webhook или проверьте, что отчёт ссылается на существующий файл.',
-                        ] : null,
+                            'screenshots_dir' => $screenshotsDir,
+                            'dirs_found' => $dirs ?? [],
+                            'project_root' => $projectRoot,
+                            'current_file' => __FILE__
+                        ]
                     ], 404);
                 }
                 
@@ -1765,14 +1741,6 @@ return function (array $context, Request $request) use ($debugMode): Response {
                 $waveId = $matches[1];
                 $controller = new WaveController();
                 return $controller->getStatus($waveId);
-            }
-        }
-
-        if (preg_match('#^/waves/([^/]+)/reset-status$#', $apiPath, $matches)) {
-            if ($request->getMethod() === 'POST') {
-                $waveId = $matches[1];
-                $controller = new WaveController();
-                return $controller->resetStatus($request, $waveId);
             }
         }
 

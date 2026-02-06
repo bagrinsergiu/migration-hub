@@ -4,7 +4,6 @@ namespace Dashboard\Controllers;
 
 use Dashboard\Services\DatabaseService;
 use Dashboard\Services\GoogleSheetsService;
-use Dashboard\Services\GoogleSheetsSyncService;
 use Exception;
 use Symfony\Component\HttpFoundation\JsonResponse;
 use Symfony\Component\HttpFoundation\Request;
@@ -194,13 +193,6 @@ class GoogleSheetsController
      */
     public function sync(Request $request, int $id): JsonResponse
     {
-        error_log("═══════════════════════════════════════════════════════════════");
-        error_log("[GoogleSheetsController::sync] 📥 ПОЛУЧЕН ЗАПРОС НА СИНХРОНИЗАЦИЮ");
-        error_log("  ID таблицы: {$id}");
-        error_log("  URL: " . ($request->getUri() ?? 'N/A'));
-        error_log("  Method: " . $request->getMethod());
-        error_log("═══════════════════════════════════════════════════════════════");
-
         try {
             $data = json_decode($request->getContent(), true);
             
@@ -208,100 +200,19 @@ class GoogleSheetsController
                 $data = $request->request->all();
             }
 
-            error_log("[GoogleSheetsController::sync] 📋 Шаг 1: Получение информации о таблице из БД...");
-            // Получаем информацию о таблице из БД
-            $db = $this->dbService->getWriteConnection();
-            $sheet = $db->find(
-                "SELECT spreadsheet_id, sheet_name, wave_id 
-                 FROM google_sheets 
-                 WHERE id = ?",
-                [$id]
-            );
+            $sheetName = isset($data['sheet_name']) ? trim($data['sheet_name']) : null;
 
-            if (!$sheet) {
-                error_log("[GoogleSheetsController::sync] ❌ Таблица с ID {$id} не найдена");
-                $response = new JsonResponse([
-                    'success' => false,
-                    'error' => 'Таблица не найдена'
-                ], 404);
-                $response->headers->set('Content-Type', 'application/json; charset=utf-8');
-                return $response;
-            }
-
-            error_log("[GoogleSheetsController::sync] ✓ Таблица найдена:");
-            error_log("  Spreadsheet ID: {$sheet['spreadsheet_id']}");
-            error_log("  Sheet Name: " . ($sheet['sheet_name'] ?? 'не указан'));
-            error_log("  Wave ID: " . ($sheet['wave_id'] ?? 'не указан'));
-
-            // Получаем sheet_name из запроса или из БД
-            $sheetName = isset($data['sheet_name']) && !empty(trim($data['sheet_name'])) 
-                ? trim($data['sheet_name']) 
-                : ($sheet['sheet_name'] ?? null);
-
-            if (isset($data['sheet_name'])) {
-                error_log("[GoogleSheetsController::sync] 📝 Sheet name из запроса: " . $data['sheet_name']);
-            }
-
-            if (empty($sheetName)) {
-                error_log("[GoogleSheetsController::sync] ❌ Название листа не указано");
-                $response = new JsonResponse([
-                    'success' => false,
-                    'error' => 'Название листа не указано. Укажите sheet_name в теле запроса или привяжите лист к таблице через /api/google-sheets/link-wave.'
-                ], 400);
-                $response->headers->set('Content-Type', 'application/json; charset=utf-8');
-                return $response;
-            }
-
-            error_log("[GoogleSheetsController::sync] ✓ Используется лист: {$sheetName}");
-            error_log("[GoogleSheetsController::sync] 🚀 Шаг 2: Запуск синхронизации...");
-
-            // Используем GoogleSheetsSyncService для синхронизации
-            $syncService = new GoogleSheetsSyncService();
-            $stats = $syncService->syncSheet(
-                $sheet['spreadsheet_id'],
-                $sheetName,
-                $sheet['wave_id'] ?? null
-            );
-
-            error_log("[GoogleSheetsController::sync] ✅ Синхронизация завершена успешно");
-            error_log("[GoogleSheetsController::sync] 📊 Статистика:");
-            error_log("  Всего строк: {$stats['total_rows']}");
-            error_log("  Обработано: {$stats['processed']}");
-            error_log("  Создано: {$stats['created']}");
-            error_log("  Обновлено: {$stats['updated']}");
-            error_log("  Не найдено: {$stats['not_found']}");
-            error_log("  Ошибок: {$stats['errors']}");
-
-            $response = new JsonResponse([
-                'success' => true,
-                'data' => [
-                    'sheet_id' => $id,
-                    'spreadsheet_id' => $sheet['spreadsheet_id'],
-                    'sheet_name' => $sheetName,
-                    'wave_id' => $sheet['wave_id'] ?? null,
-                    'stats' => $stats
-                ]
-            ], 200);
-            $response->headers->set('Content-Type', 'application/json; charset=utf-8');
-            return $response;
+            // TODO: Реализовать через GoogleSheetsSyncService->syncSheet()
+            return new JsonResponse([
+                'success' => false,
+                'error' => 'Google Sheets Sync Service не реализован. Необходимо выполнить задачу TASK-006'
+            ], 501);
 
         } catch (Exception $e) {
-            error_log("═══════════════════════════════════════════════════════════════");
-            error_log("[GoogleSheetsController::sync] ❌ ОШИБКА СИНХРОНИЗАЦИИ");
-            error_log("  Сообщение: " . $e->getMessage());
-            error_log("  Файл: " . $e->getFile());
-            error_log("  Строка: " . $e->getLine());
-            error_log("  Stack trace: " . $e->getTraceAsString());
-            error_log("═══════════════════════════════════════════════════════════════");
-            
+            error_log("[GoogleSheetsController::sync] Error: " . $e->getMessage());
             $response = new JsonResponse([
                 'success' => false,
-                'error' => $e->getMessage(),
-                'debug' => [
-                    'message' => $e->getMessage(),
-                    'file' => $e->getFile(),
-                    'line' => $e->getLine()
-                ]
+                'error' => $e->getMessage()
             ], 500);
             $response->headers->set('Content-Type', 'application/json; charset=utf-8');
             return $response;

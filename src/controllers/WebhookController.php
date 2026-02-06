@@ -3,7 +3,6 @@
 namespace Dashboard\Controllers;
 
 use Dashboard\Services\DatabaseService;
-use Dashboard\Services\GoogleSheetsService;
 use Dashboard\Services\MigrationService;
 use Exception;
 use Symfony\Component\HttpFoundation\JsonResponse;
@@ -35,7 +34,7 @@ class WebhookController
             $mbProjectUuid = $data['mb_project_uuid'];
             $brzProjectId = (int)$data['brz_project_id'];
             
-            error_log("[MIG] WebhookController::migrationResult — получен веб-хук: mb_project_uuid={$mbProjectUuid}, brz_project_id={$brzProjectId}, status=" . ($data['status'] ?? 'n/a'));
+            error_log("[WebhookController::migrationResult] Получен веб-хук для миграции: mb_project_uuid={$mbProjectUuid}, brz_project_id={$brzProjectId}");
             
             $dbService = new DatabaseService();
             $migrationService = new MigrationService();
@@ -111,15 +110,6 @@ class WebhookController
             ]);
             
             error_log("[WebhookController::migrationResult] Статус миграции обновлен: status={$status}, mb_project_uuid={$mbProjectUuid}, brz_project_id={$brzProjectId}");
-            
-            if ($status === 'completed' && !empty($data['brizy_project_domain'])) {
-                try {
-                    $googleSheetsService = new GoogleSheetsService();
-                    $googleSheetsService->updateWebsiteBrizyForMigration($mbProjectUuid, $data['brizy_project_domain']);
-                } catch (Exception $e) {
-                    error_log("[WebhookController::migrationResult] updateWebsiteBrizyForMigration: " . $e->getMessage());
-                }
-            }
             
             return new JsonResponse([
                 'success' => true,

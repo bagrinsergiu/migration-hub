@@ -1,0 +1,151 @@
+# Rules for Effective Use of MCP Servers
+
+## General Principles
+
+When working with the **migration-hub** project, use available MCP servers for maximum efficiency:
+
+### 1. Serena (Semantic Code Analysis)
+
+**When to use:**
+
+* Searching for classes, functions, or methods by name or pattern
+* Navigating through code and understanding project structure
+* Targeted code editing (replacing a function body, inserting after a symbol)
+* Getting a file overview (`get_symbols_overview`)
+* Finding all symbol usages (`find_referencing_symbols`)
+
+**Tools:**
+
+* `find_symbol` — for searching symbols
+* `get_symbols_overview` — for understanding file structure
+* `find_referencing_symbols` — for finding usages
+* `replace_symbol_body` — for targeted editing
+* `read_file` — for reading files (preferred over regular read_file)
+
+**Rule:** Always use Serena for code navigation instead of grep when it is available.
+
+---
+
+### 2. Ripgrep (Fast Text Search)
+
+**When to use:**
+
+* Searching for exact strings or patterns in files
+* Counting pattern occurrences
+* Searching with file type filtering
+* Searching in hidden files or specific directories
+
+**Tools:**
+
+* `mcp_ripgrep_search` — basic search
+* `mcp_ripgrep_advanced-search` — search with filters
+* `mcp_ripgrep_count-matches` — count matches
+* `mcp_ripgrep_list-files` — list files
+
+**Rule:** Use Ripgrep for text search when semantic analysis is not required.
+
+---
+
+### 3. Databases (dbhub-migration, dbhub-client-readonly)
+
+**When to use:**
+
+* Working with the migration database (MySQL) — full access
+* Reading data from the client database (PostgreSQL/MySQL) — read-only
+* Executing SQL queries
+* Searching for tables, columns, and indexes
+
+**Tools:**
+
+* `mcp_dbhub-migration_execute_sql` — execute SQL on the migration database
+* `mcp_dbhub-migration_search_objects` — search database objects
+* `mcp_dbhub-client-readonly_execute_sql` — read from the client database
+* `mcp_dbhub-client-readonly_search_objects` — search objects in the client database
+
+**Rule:**
+
+* Use `dbhub-migration` for writing data
+* Use `dbhub-client-readonly` for reading client data
+
+---
+
+### 4. Playwright (Browser Automation)
+
+**When to use:**
+
+* Testing web interfaces
+* Automating browser actions
+* Creating screenshots
+* Interacting with web pages
+
+**Tools:**
+
+* `mcp_playwright_browser_navigate` — navigation
+* `mcp_playwright_browser_click` — clicks
+* `mcp_playwright_browser_snapshot` — page snapshot
+* `mcp_playwright_browser_take_screenshot` — screenshot
+
+**Rule:** Use it for testing and automating web functionality.
+
+---
+
+### 5. GitMCP (Repository Context)
+
+**When to use:**
+
+* Retrieving documentation from the repository
+* Searching information in README, llms.txt
+* Understanding project structure through documentation
+
+**Tools:**
+
+* `mcp_gitmcp-migration-hub_fetch_migration_hub_documentation` — full documentation
+* `mcp_gitmcp-migration-hub_search_migration_hub_docs` — search documentation
+* `mcp_gitmcp-migration-hub_search_migration_hub_code` — search code
+
+**Rule:** Use it to obtain project context from documentation.
+
+---
+
+## Usage Priorities
+
+### 1. Code Navigation:
+
+* First: Serena (`find_symbol`, `get_symbols_overview`)
+* If unavailable: Ripgrep or regular grep
+
+### 2. Text Search:
+
+* First: Ripgrep (faster and more powerful)
+* If semantic context is required: Serena
+
+### 3. Database Work:
+
+* Writing: `dbhub-migration`
+* Reading client data: `dbhub-client-readonly`
+
+### 4. Documentation:
+
+* Use GitMCP to obtain repository context
+* Use local files in `doc/` for detailed information
+
+---
+
+## Performance Optimization
+
+* Use `get_symbols_overview` before detailed file reading
+* Use `count-matches` before full search if only the count is needed
+* Use Ripgrep filters to limit the search scope
+* Use `find_referencing_symbols` instead of manually searching for all usages
+
+---
+
+## Tool Combination
+
+Examples of effective combinations:
+
+* Serena to find a function → Ripgrep to find all its calls
+* GitMCP to understand architecture → Serena to navigate the code
+* dbhub to verify the database schema → Serena to find code interacting with the database
+
+---

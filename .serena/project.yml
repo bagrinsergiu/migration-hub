@@ -27,7 +27,6 @@ project_name: "migration-hub"
 # Note that when using the JetBrains backend, language servers are not used and this list is correspondingly ignored.
 languages:
 - php
-- typescript
 
 # the encoding used by text files in the project
 # For a list of possible encodings, see https://docs.python.org/3.11/library/codecs.html#standard-encodings
@@ -110,6 +109,4 @@ default_modes:
 
 # initial prompt for the project. It will always be given to the LLM upon activating the project
 # (contrary to the memories, which are loaded on demand).
-# See doc/ONBOARDING.md for full onboarding.
-initial_prompt: |
-  Project: MB Migration Dashboard (migration-hub). Backend: PHP 8.3 in src/ (namespace Dashboard\). Frontend: React/TypeScript in frontend/src/. DB: MySQL. Key entry: public/index.php -> src/index.php. Use find_symbol/get_symbols_overview for navigation; replace_symbol_body for precise edits. Controllers in src/controllers/, services in src/services/.
+initial_prompt: ""

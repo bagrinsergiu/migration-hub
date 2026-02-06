@@ -30,13 +30,13 @@ export default function ReviewTokensManager({ waveId, projects }: ReviewTokensMa
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [showCreateModal, setShowCreateModal] = useState(false);
-  const [projectsAccordionOpen, setProjectsAccordionOpen] = useState<Set<number>>(new Set());
+  const [projectsAccordionOpen, setProjectsAccordionOpen] = useState(false);
+  const [expandedTokens, setExpandedTokens] = useState<Set<number>>(new Set());
   const [formData, setFormData] = useState({
     name: '',
     description: '',
     expires_in_days: '',
-    project_settings: {} as Record<string, { allowed_tabs: string[]; is_active: boolean }>,
-    applyToAllTemplate: { allowed_tabs: [] as string[], is_active: true }
+    project_settings: {} as Record<string, { allowed_tabs: string[]; is_active: boolean }>
   });
 
   const availableTabs = ['overview', 'details', 'logs', 'screenshots', 'quality'];
@@ -80,19 +80,7 @@ export default function ReviewTokensManager({ waveId, projects }: ReviewTokensMa
         setError(response.error || 'Ошибка создания токена');
       }
     } catch (err: any) {
-      const code = err?.code;
-      const status = err?.response?.status;
-      let msg: string;
-      if (code === 'ERR_NETWORK' || code === 'ERR_NETWORK_CHANGED') {
-        msg = 'Ошибка сети. Проверьте подключение и что бэкенд (localhost:8088) запущен. Попробуйте ещё раз.';
-      } else if (status === 502) {
-        msg = 'Бэкенд недоступен (502 Bad Gateway). Убедитесь, что сервер запущен на порту 8088.';
-      } else if (status === 500) {
-        msg = err?.response?.data?.error || 'Ошибка сервера (500). Проверьте логи бэкенда.';
-      } else {
-        msg = err?.response?.data?.error || err.message || 'Ошибка создания токена';
-      }
-      setError(msg);
+      setError(err.message || 'Ошибка создания токена');
     }
   };
 
@@ -137,37 +125,7 @@ export default function ReviewTokensManager({ waveId, projects }: ReviewTokensMa
       name: '',
       description: '',
       expires_in_days: '',
-      project_settings: {},
-      applyToAllTemplate: { allowed_tabs: [], is_active: true }
-    });
-  };
-
-  const applyToAllProjects = () => {
-    const template = formData.applyToAllTemplate;
-    const newSettings: Record<string, { allowed_tabs: string[]; is_active: boolean }> = {};
-    projects.forEach(p => {
-      newSettings[p.mb_uuid] = {
-        allowed_tabs: [...template.allowed_tabs],
-        is_active: template.is_active
-      };
-    });
-    setFormData({
-      ...formData,
-      project_settings: newSettings
-    });
-  };
-
-  const toggleApplyToAllTab = (tab: string) => {
-    const current = formData.applyToAllTemplate.allowed_tabs;
-    const allowedTabs = current.includes(tab)
-      ? current.filter(t => t !== tab)
-      : [...current, tab];
-    setFormData({
-      ...formData,
-      applyToAllTemplate: {
-        ...formData.applyToAllTemplate,
-        allowed_tabs: allowedTabs
-      }
+      project_settings: {}
     });
   };
 
@@ -281,26 +239,25 @@ export default function ReviewTokensManager({ waveId, projects }: ReviewTokensMa
               </div>
 
               {token.projects && token.projects.length > 0 && (
-                <div className="token-projects token-projects-accordion">
-                  <button
-                    type="button"
-                    className="token-projects-accordion-trigger"
+                <div className="token-projects">
+                  <div 
+                    className="accordion-header" 
                     onClick={() => {
-                      setProjectsAccordionOpen((prev) => {
-                        const next = new Set(prev);
-                        if (next.has(token.id)) next.delete(token.id);
-                        else next.add(token.id);
-                        return next;
-                      });
+                      const newExpanded = new Set(expandedTokens);
+                      if (newExpanded.has(token.id)) {
+                        newExpanded.delete(token.id);
+                      } else {
+                        newExpanded.add(token.id);
+                      }
+                      setExpandedTokens(newExpanded);
                     }}
-                    aria-expanded={projectsAccordionOpen.has(token.id)}
                   >
-                    <span className="token-projects-accordion-title">
-                      Настройки доступа по проектам: <span className="token-projects-count">({token.projects.length})</span>
+                    <h5>Настройки доступа по проектам:</h5>
+                    <span className="accordion-toggle">
+                      {expandedTokens.has(token.id) ? '▼' : '▶'}
                     </span>
-                    <span className={`token-projects-accordion-icon ${projectsAccordionOpen.has(token.id) ? 'is-open' : ''}`} aria-hidden>▼</span>
-                  </button>
-                  {projectsAccordionOpen.has(token.id) && (
+                  </div>
+                  {expandedTokens.has(token.id) && (
                     <div className="projects-access-list">
                       {token.projects.map((project) => {
                         const projectInfo = projects.find(p => p.mb_uuid === project.mb_uuid);
@@ -384,51 +341,15 @@ export default function ReviewTokensManager({ waveId, projects }: ReviewTokensMa
               </div>
 
               <div className="form-group">
-                <label>Настройки доступа по проектам:</label>
-                <div className="apply-to-all-block">
-                  <div className="apply-to-all-header">
-                    <span className="apply-to-all-title">Применить ко всем проектам:</span>
-                    <button
-                      type="button"
-                      className="btn btn-sm btn-secondary"
-                      onClick={applyToAllProjects}
-                    >
-                      Применить ко всем
-                    </button>
-                  </div>
-                  <div className="apply-to-all-settings">
-                    <label className="toggle-row">
-                      <input
-                        type="checkbox"
-                        checked={formData.applyToAllTemplate.is_active}
-                        onChange={(e) =>
-                          setFormData({
-                            ...formData,
-                            applyToAllTemplate: {
-                              ...formData.applyToAllTemplate,
-                              is_active: e.target.checked
-                            }
-                          })
-                        }
-                      />
-                      <span>Доступ включён</span>
-                    </label>
-                    <div className="apply-to-all-tabs">
-                      {availableTabs.map((tab) => (
-                        <label key={tab} className="tab-checkbox">
-                          <input
-                            type="checkbox"
-                            checked={formData.applyToAllTemplate.allowed_tabs.includes(tab)}
-                            onChange={() => toggleApplyToAllTab(tab)}
-                          />
-                          <span>{tab}</span>
-                        </label>
-                      ))}
-                    </div>
-                  </div>
+                <div className="accordion-header" onClick={() => setProjectsAccordionOpen(!projectsAccordionOpen)}>
+                  <label>Настройки доступа по проектам:</label>
+                  <span className="accordion-toggle">
+                    {projectsAccordionOpen ? '▼' : '▶'}
+                  </span>
                 </div>
-                <div className="projects-settings">
-                  {projects.map((project) => {
+                {projectsAccordionOpen && (
+                  <div className="projects-settings">
+                    {projects.map((project) => {
                     const projectSettings = formData.project_settings[project.mb_uuid] || {
                       allowed_tabs: [],
                       is_active: true
@@ -480,7 +401,8 @@ export default function ReviewTokensManager({ waveId, projects }: ReviewTokensMa
                       </div>
                     );
                   })}
-                </div>
+                  </div>
+                )}
               </div>
             </div>
             <div className="modal-footer">

@@ -19,9 +19,6 @@
       "Dashboard\\": "src/",
       "MBMigration\\": "lib/MBMigration/"
     },
-    "classmap": [
-      "src/services/"
-    ],
     "files": [
       "lib/MBMigration/Core/Config.php"
     ]

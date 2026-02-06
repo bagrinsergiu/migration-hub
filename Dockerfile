@@ -56,8 +56,8 @@ RUN apt-get update && \
         pdo_mysql \
         sockets \
         && \
-    mkdir -p /project/var/log/nginx /project/var/log/php /project/var/log/syslog /project/var/cache /project/var/tmp /project/var/config /project/var/screenshots /var/run/php && \
-    chown -R www-data:www-data /project/var/log /project/var/cache /project/var/tmp /project/var/config /project/var/screenshots /var/run/php && \
+    mkdir -p /project/var/log/nginx /project/var/log/php /project/var/log/syslog /project/var/cache /project/var/tmp /project/var/config /var/run/php && \
+    chown -R www-data:www-data /project/var/log /project/var/cache /project/var/tmp /project/var/config /var/run/php && \
     chmod -R 755 /project/var/log /var/run/php && \
     rm -rf /var/lib/apt/lists/*
 

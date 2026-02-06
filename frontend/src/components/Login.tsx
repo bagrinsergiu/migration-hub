@@ -19,7 +19,9 @@ export default function Login() {
 
     try {
       const response = await api.login(username, password);
-
+      
+      console.log('Login response:', response);
+      
       if (response.success) {
         // Сохраняем session_id в localStorage для использования в API запросах
         if (response.data?.session_id) {

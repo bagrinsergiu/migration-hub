@@ -146,30 +146,6 @@ class MySQL
         }
     }
 
-    /**
-     * Execute SQL that does not return a result set (CREATE, INSERT, UPDATE, DELETE, etc.)
-     *
-     * @param string $sql
-     * @param array $params
-     * @return bool
-     */
-    public function execute(string $sql, array $params = []): bool
-    {
-        try {
-            $stmt = $this->pdo->prepare($sql);
-            $stmt->execute($params);
-            return true;
-        } catch (PDOException $e) {
-            if ($e->errorInfo[1] == 2006 || $e->errorInfo[1] == 2013 || strpos($e->getMessage(), 'server has gone away') !== false) {
-                $this->doConnect();
-                $stmt = $this->pdo->prepare($sql);
-                $stmt->execute($params);
-                return true;
-            }
-            throw $e;
-        }
-    }
-
     public function delete($table, $where, $params = []): bool
     {
         $sql = "DELETE FROM {$table} WHERE {$where}";

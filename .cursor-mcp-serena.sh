@@ -1,9 +1,9 @@
 #!/bin/bash
-# MCP Serena wrapper: запуск с явным путём проекта, чтобы проект определялся
-# независимо от текущей директории Cursor.
-# Конфигурация проекта: .serena/project.yml
+# Скрипт для запуска Serena MCP сервера с явным указанием пути к проекту
 
-SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+# Определяем корень проекта по расположению скрипта
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$SCRIPT_DIR"
 
-exec uvx --from git+https://github.com/oraios/serena serena start-mcp-server --project "$PROJECT_ROOT" "$@"
+# Запускаем Serena с явным указанием проекта
+exec uvx --from git+https://github.com/oraios/serena serena start-mcp-server --project "$PROJECT_ROOT"

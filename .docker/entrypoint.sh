@@ -12,11 +12,11 @@ if [ ! -f .env ]; then
     fi
 fi
 
-# Создаем директории для логов и скриншотов если их нет
-mkdir -p /project/var/log/nginx /project/var/log/php /project/var/log/syslog /project/var/cache /project/var/tmp /project/var/config /project/var/screenshots /var/run/php
+# Создаем директории для логов если их нет
+mkdir -p /project/var/log/nginx /project/var/log/php /project/var/log/syslog /project/var/cache /project/var/tmp /project/var/config /var/run/php
 
 # Устанавливаем права на директории
-chown -R www-data:www-data /project/var/log /project/var/cache /project/var/tmp /project/var/config /project/var/screenshots || true
+chown -R www-data:www-data /project/var/log /project/var/cache /project/var/tmp /project/var/config || true
 chmod -R 755 /project/var/log || true
 # Устанавливаем права на файлы логов (на случай если они уже созданы)
 chown -R www-data:www-data /project/var/log/* || true

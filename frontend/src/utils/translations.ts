@@ -83,9 +83,6 @@ export interface Translations {
   shown: string;
   of: string;
   projects: string;
-  reviewer: string;
-  projectName: string;
-  reviewReady: string;
   
   // Errors
   tokenOrUuidNotSpecified: string;
@@ -188,9 +185,6 @@ const translations: Record<Language, Translations> = {
     shown: 'Shown:',
     of: 'of',
     projects: 'projects',
-    reviewer: 'Reviewer',
-    projectName: 'Name',
-    reviewReady: 'Review ready',
     tokenOrUuidNotSpecified: 'Token or project UUID not specified',
     failedToLoadProjectDetails: 'Failed to load project details',
     errorLoadingData: 'Error loading data',
@@ -287,9 +281,6 @@ const translations: Record<Language, Translations> = {
     shown: 'Afișate:',
     of: 'din',
     projects: 'proiecte',
-    reviewer: 'Revizor',
-    projectName: 'Nume',
-    reviewReady: 'Revizuire finalizată',
     tokenOrUuidNotSpecified: 'Token sau UUID proiect nespecificat',
     failedToLoadProjectDetails: 'Nu s-au putut încărca detaliile proiectului',
     errorLoadingData: 'Eroare la încărcarea datelor',
@@ -386,9 +377,6 @@ const translations: Record<Language, Translations> = {
     shown: 'Показано:',
     of: 'из',
     projects: 'проектов',
-    reviewer: 'Ревьюер',
-    projectName: 'Имя',
-    reviewReady: 'Ревью готово',
     tokenOrUuidNotSpecified: 'Токен или UUID проекта не указан',
     failedToLoadProjectDetails: 'Не удалось загрузить детали проекта',
     errorLoadingData: 'Ошибка загрузки данных',
