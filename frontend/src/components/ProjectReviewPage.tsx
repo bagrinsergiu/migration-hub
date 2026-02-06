@@ -1270,7 +1270,7 @@ function PageAnalysisDetailsModal({
   const migratedScreenshot = report.screenshots_path?.migrated;
   
   // Функция для получения URL скриншота
-  const getScreenshotUrl = (path: string | null | undefined): string | null => {
+  const getScreenshotUrl = (path: string | null | undefined, type?: 'source' | 'migrated'): string | null => {
     if (!path) return null;
     
     // Если это уже URL (начинается с /api/), используем его напрямую
@@ -1278,11 +1278,23 @@ function PageAnalysisDetailsModal({
       return path;
     }
     
-    // Если это полный путь к файлу, извлекаем имя файла и используем новый эндпоинт
+    // Если это полный путь к файлу, извлекаем имя файла
     const filename = getFilename(path);
-    if (filename && mbUuid) {
-      // Используем новый эндпоинт для получения скриншота из хранилища дашборда
+    if (!filename) return null;
+    
+    // Если есть mbUuid, используем новый эндпоинт для получения скриншота из хранилища дашборда
+    if (mbUuid) {
       return `/api/screenshots/${mbUuid}/${filename}`;
+    }
+    
+    // Если mbUuid нет, но есть type и token, используем endpoint с токеном
+    if (type && token) {
+      return `/api/review/wave/${token}/migration/${brzProjectId}/analysis/${encodeURIComponent(pageSlug)}/screenshots/${type}`;
+    }
+    
+    // Fallback: используем старый endpoint с токеном
+    if (token) {
+      return `/api/review/wave/${token}/screenshots/${filename}`;
     }
     
     return null;
@@ -1304,8 +1316,8 @@ function PageAnalysisDetailsModal({
     return filename ? filename.trim() : null;
   };
   
-  const sourceUrl = getScreenshotUrl(sourceScreenshot);
-  const migratedUrl = getScreenshotUrl(migratedScreenshot);
+  const sourceUrl = getScreenshotUrl(sourceScreenshot, 'source');
+  const migratedUrl = getScreenshotUrl(migratedScreenshot, 'migrated');
   const sourceFilename = getFilename(sourceScreenshot);
   const migratedFilename = getFilename(migratedScreenshot);
 
@@ -1446,47 +1458,59 @@ function PageAnalysisDetailsModal({
           {activeTab === 'screenshots' && (
             <div className="screenshots-tab">
               <div className="screenshots-grid">
-                {sourceScreenshot && sourceUrl && (
+                {sourceScreenshot && (
                   <div className="screenshot-item">
                     <h4>{t('sourcePage')}</h4>
-                    <img
-                      src={sourceUrl}
-                      alt="Source screenshot"
-                      className="screenshot-image"
-                      style={{ cursor: 'pointer' }}
-                      onClick={() => setFullscreenImage(sourceUrl)}
-                      onError={async (e) => {
-                        // Если новый эндпоинт не сработал, пробуем старый способ
-                        if (sourceFilename && !sourceUrl.includes('/screenshots/')) {
-                          const fallbackUrl = `/api/review/wave/${token}/screenshots/${sourceFilename}`;
-                          (e.target as HTMLImageElement).src = fallbackUrl;
-                        } else {
-                          (e.target as HTMLImageElement).src = `data:image/svg+xml,%3Csvg xmlns="http://www.w3.org/2000/svg" width="400" height="300"%3E%3Ctext x="50%25" y="50%25" text-anchor="middle" dy=".3em"%3E${encodeURIComponent(t('screenshotNotFound'))}%3C/text%3E%3C/svg%3E`;
-                        }
-                      }}
-                    />
+                    {sourceUrl ? (
+                      <img
+                        src={sourceUrl}
+                        alt="Source screenshot"
+                        className="screenshot-image"
+                        style={{ cursor: 'pointer' }}
+                        onClick={() => setFullscreenImage(sourceUrl!)}
+                        onError={async (e) => {
+                          // Если новый эндпоинт не сработал, пробуем старый способ
+                          if (sourceFilename && !sourceUrl!.includes('/screenshots/')) {
+                            const fallbackUrl = `/api/review/wave/${token}/screenshots/${sourceFilename}`;
+                            (e.target as HTMLImageElement).src = fallbackUrl;
+                          } else {
+                            (e.target as HTMLImageElement).src = `data:image/svg+xml,%3Csvg xmlns="http://www.w3.org/2000/svg" width="400" height="300"%3E%3Ctext x="50%25" y="50%25" text-anchor="middle" dy=".3em"%3E${encodeURIComponent(t('screenshotNotFound'))}%3C/text%3E%3C/svg%3E`;
+                          }
+                        }}
+                      />
+                    ) : (
+                      <div className="screenshot-placeholder">
+                        <p>{t('screenshotNotFound')}</p>
+                      </div>
+                    )}
                     <p className="screenshot-path">{sourceScreenshot}</p>
                   </div>
                 )}
-                {migratedScreenshot && migratedUrl && (
+                {migratedScreenshot && (
                   <div className="screenshot-item">
                     <h4>{t('migratedPage')}</h4>
-                    <img
-                      src={migratedUrl}
-                      alt="Migrated screenshot"
-                      className="screenshot-image"
-                      style={{ cursor: 'pointer' }}
-                      onClick={() => setFullscreenImage(migratedUrl)}
-                      onError={async (e) => {
-                        // Если новый эндпоинт не сработал, пробуем старый способ
-                        if (migratedFilename && !migratedUrl.includes('/screenshots/')) {
-                          const fallbackUrl = `/api/review/wave/${token}/screenshots/${migratedFilename}`;
-                          (e.target as HTMLImageElement).src = fallbackUrl;
-                        } else {
-                          (e.target as HTMLImageElement).src = `data:image/svg+xml,%3Csvg xmlns="http://www.w3.org/2000/svg" width="400" height="300"%3E%3Ctext x="50%25" y="50%25" text-anchor="middle" dy=".3em"%3E${encodeURIComponent(t('screenshotNotFound'))}%3C/text%3E%3C/svg%3E`;
-                        }
-                      }}
-                    />
+                    {migratedUrl ? (
+                      <img
+                        src={migratedUrl}
+                        alt="Migrated screenshot"
+                        className="screenshot-image"
+                        style={{ cursor: 'pointer' }}
+                        onClick={() => setFullscreenImage(migratedUrl!)}
+                        onError={async (e) => {
+                          // Если новый эндпоинт не сработал, пробуем старый способ
+                          if (migratedFilename && !migratedUrl!.includes('/screenshots/')) {
+                            const fallbackUrl = `/api/review/wave/${token}/screenshots/${migratedFilename}`;
+                            (e.target as HTMLImageElement).src = fallbackUrl;
+                          } else {
+                            (e.target as HTMLImageElement).src = `data:image/svg+xml,%3Csvg xmlns="http://www.w3.org/2000/svg" width="400" height="300"%3E%3Ctext x="50%25" y="50%25" text-anchor="middle" dy=".3em"%3E${encodeURIComponent(t('screenshotNotFound'))}%3C/text%3E%3C/svg%3E`;
+                          }
+                        }}
+                      />
+                    ) : (
+                      <div className="screenshot-placeholder">
+                        <p>{t('screenshotNotFound')}</p>
+                      </div>
+                    )}
                     <p className="screenshot-path">{migratedScreenshot}</p>
                   </div>
                 )}

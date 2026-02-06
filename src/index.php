@@ -883,17 +883,39 @@ return function (array $context, Request $request) use ($debugMode): Response {
                     $screenshotService = new \Dashboard\Services\ScreenshotService();
                     $screenshot = $screenshotService->getScreenshot($mbUuid, $pageSlug, $type);
                     
-                    if (!$screenshot) {
-                        return new JsonResponse([
+                    if (!$screenshot || !isset($screenshot['path'])) {
+                        http_response_code(404);
+                        header('Content-Type: application/json; charset=utf-8');
+                        echo json_encode([
                             'success' => false,
                             'error' => 'Скриншот не найден'
-                        ], 404, ['Content-Type' => 'application/json; charset=utf-8']);
+                        ], JSON_UNESCAPED_UNICODE);
+                        exit;
                     }
                     
-                    return new JsonResponse([
-                        'success' => true,
-                        'data' => $screenshot
-                    ], 200, ['Content-Type' => 'application/json; charset=utf-8']);
+                    $filePath = $screenshot['path'];
+                    
+                    if (!file_exists($filePath)) {
+                        http_response_code(404);
+                        header('Content-Type: application/json; charset=utf-8');
+                        echo json_encode([
+                            'success' => false,
+                            'error' => 'Файл скриншота не найден'
+                        ], JSON_UNESCAPED_UNICODE);
+                        exit;
+                    }
+                    
+                    // Определяем MIME тип
+                    $mimeType = mime_content_type($filePath);
+                    if (!$mimeType) {
+                        $mimeType = 'image/png'; // По умолчанию PNG
+                    }
+                    
+                    header('Content-Type: ' . $mimeType);
+                    header('Content-Length: ' . filesize($filePath));
+                    header('Cache-Control: public, max-age=3600');
+                    readfile($filePath);
+                    exit;
                 } catch (\Throwable $e) {
                     error_log("Error in screenshot endpoint: " . $e->getMessage());
                     error_log("Stack trace: " . $e->getTraceAsString());
@@ -905,7 +927,67 @@ return function (array $context, Request $request) use ($debugMode): Response {
             }
         }
 
-        // Прямой доступ к файлам скриншотов
+        // Прямой доступ к файлам скриншотов через /api/screenshots/
+        if (preg_match('#^/api/screenshots/([^/]+)/(.+)$#', $apiPath, $matches)) {
+            if ($request->getMethod() === 'GET') {
+                try {
+                    $mbUuid = $matches[1];
+                    $filename = basename($matches[2]);
+                    
+                    $screenshotService = new \Dashboard\Services\ScreenshotService();
+                    $filePath = $screenshotService->getScreenshotFile($mbUuid, $filename);
+                    
+                    if (!$filePath) {
+                        error_log("Screenshot not found: mbUuid=$mbUuid, filename=$filename");
+                        http_response_code(404);
+                        header('Content-Type: application/json; charset=utf-8');
+                        echo json_encode([
+                            'success' => false,
+                            'error' => 'Файл скриншота не найден',
+                            'debug' => [
+                                'mbUuid' => $mbUuid,
+                                'filename' => $filename
+                            ]
+                        ], JSON_UNESCAPED_UNICODE);
+                        exit;
+                    }
+                    
+                    if (!file_exists($filePath)) {
+                        error_log("Screenshot file does not exist: $filePath (mbUuid=$mbUuid, filename=$filename)");
+                        http_response_code(404);
+                        header('Content-Type: application/json; charset=utf-8');
+                        echo json_encode([
+                            'success' => false,
+                            'error' => 'Файл скриншота не найден по пути: ' . $filePath
+                        ], JSON_UNESCAPED_UNICODE);
+                        exit;
+                    }
+                    
+                    // Определяем MIME тип
+                    $mimeType = mime_content_type($filePath);
+                    if (!$mimeType) {
+                        $mimeType = 'image/png'; // По умолчанию PNG
+                    }
+                    
+                    header('Content-Type: ' . $mimeType);
+                    header('Content-Length: ' . filesize($filePath));
+                    header('Cache-Control: public, max-age=3600');
+                    readfile($filePath);
+                    exit;
+                } catch (\Throwable $e) {
+                    error_log("Error serving screenshot file: " . $e->getMessage());
+                    http_response_code(500);
+                    header('Content-Type: application/json; charset=utf-8');
+                    echo json_encode([
+                        'success' => false,
+                        'error' => 'Ошибка при получении файла скриншота'
+                    ], JSON_UNESCAPED_UNICODE);
+                    exit;
+                }
+            }
+        }
+
+        // Прямой доступ к файлам скриншотов (старый формат без /api/)
         if (preg_match('#^/screenshots/([^/]+)/(.+)$#', $apiPath, $matches)) {
             if ($request->getMethod() === 'GET') {
                 try {

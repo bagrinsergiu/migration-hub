@@ -104,7 +104,7 @@ class ScreenshotService
 
         // Ищем в БД
         $db = $this->dbService->getWriteConnection();
-        $screenshot = $db->getRow(
+        $screenshot = $db->find(
             'SELECT filename, file_path, created_at 
              FROM dashboard_screenshots 
              WHERE mb_uuid = ? AND page_slug = ? AND type = ? 
@@ -143,10 +143,85 @@ class ScreenshotService
      */
     public function getScreenshotFile(string $mbUuid, string $filename): ?string
     {
-        $filePath = $this->screenshotsDir . $mbUuid . '/' . basename($filename);
+        $filename = basename($filename);
+        
+        // Сначала ищем в БД по имени файла и mbUuid (точное совпадение)
+        $db = $this->dbService->getWriteConnection();
+        $screenshot = $db->find(
+            'SELECT file_path 
+             FROM dashboard_screenshots 
+             WHERE mb_uuid = ? AND filename = ? 
+             ORDER BY created_at DESC 
+             LIMIT 1',
+            [$mbUuid, $filename]
+        );
+        
+        if ($screenshot && isset($screenshot['file_path'])) {
+            $filePath = $screenshot['file_path'];
+            if (file_exists($filePath) && is_file($filePath)) {
+                return $filePath;
+            }
+        }
+        
+        // Если не нашли точное совпадение, пробуем найти по части имени файла
+        // (на случай, если имя файла в URL отличается от имени в БД)
+        $screenshot = $db->find(
+            'SELECT file_path 
+             FROM dashboard_screenshots 
+             WHERE mb_uuid = ? AND (filename = ? OR filename LIKE ? OR file_path LIKE ?)
+             ORDER BY created_at DESC 
+             LIMIT 1',
+            [$mbUuid, $filename, '%' . $filename, '%' . $filename]
+        );
+        
+        if ($screenshot && isset($screenshot['file_path'])) {
+            $filePath = $screenshot['file_path'];
+            if (file_exists($filePath) && is_file($filePath)) {
+                return $filePath;
+            }
+        }
+        
+        // Если не нашли по UUID, пробуем найти только по имени файла (без учета UUID)
+        // Это нужно на случай, если файл был сохранен с другим UUID
+        $screenshot = $db->find(
+            'SELECT file_path 
+             FROM dashboard_screenshots 
+             WHERE filename = ? 
+             ORDER BY created_at DESC 
+             LIMIT 1',
+            [$filename]
+        );
+        
+        if ($screenshot && isset($screenshot['file_path'])) {
+            $filePath = $screenshot['file_path'];
+            if (file_exists($filePath) && is_file($filePath)) {
+                return $filePath;
+            }
+        }
+        
+        // Если не нашли в БД, пробуем стандартный путь
+        $filePath = $this->screenshotsDir . $mbUuid . '/' . $filename;
         
         if (file_exists($filePath) && is_file($filePath)) {
             return $filePath;
+        }
+        
+        // Если не нашли по стандартному пути, ищем файл во всех поддиректориях
+        // Это нужно на случай, если файл был сохранен в другой директории
+        if (is_dir($this->screenshotsDir)) {
+            $iterator = new \RecursiveIteratorIterator(
+                new \RecursiveDirectoryIterator($this->screenshotsDir, \RecursiveDirectoryIterator::SKIP_DOTS),
+                \RecursiveIteratorIterator::SELF_FIRST
+            );
+            
+            foreach ($iterator as $file) {
+                if ($file->isFile() && $file->getFilename() === $filename) {
+                    $foundPath = $file->getRealPath();
+                    if ($foundPath && file_exists($foundPath)) {
+                        return $foundPath;
+                    }
+                }
+            }
         }
 
         return null;

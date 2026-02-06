@@ -684,7 +684,7 @@ export default function WaveDetails() {
                               {migration.error}
                             </div>
                           )}
-                          {migration.result_data?.warnings && migration.result_data.warnings.length > 0 && (
+                          {migration.status !== 'pending' && migration.result_data?.warnings && migration.result_data.warnings.length > 0 && (
                             <div className="warning-text" style={{ fontSize: '0.75rem', marginTop: '0.25rem', color: '#856404' }}>
                               ⚠ {migration.result_data.warnings.length} предупреждений
                             </div>
