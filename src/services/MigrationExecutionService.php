@@ -91,7 +91,17 @@ class MigrationExecutionService
             $queryParams['wave_id'] = $params['wave_id'];
         }
 
+        // Параметры веб-хука для обратного вызова (сервер миграции вызовет webhook_url по завершении)
+        $dashboardBaseUrl = $_ENV['DASHBOARD_BASE_URL'] ?? getenv('DASHBOARD_BASE_URL') ?: 'http://localhost:8088';
+        $queryParams['webhook_url'] = !empty($params['webhook_url'])
+            ? $params['webhook_url']
+            : rtrim($dashboardBaseUrl, '/') . '/api/webhooks/migration-result';
+        $queryParams['webhook_mb_project_uuid'] = $params['mb_project_uuid'];
+        $queryParams['webhook_brz_project_id'] = (int)$params['brz_project_id'];
+
         $url = $this->migrationApiUrl . '/?' . http_build_query($queryParams);
+        $urlForLog = isset($queryParams['mb_secret']) ? str_replace($queryParams['mb_secret'], '***', $url) : $url;
+        error_log('[MIG] MigrationExecutionService::executeMigration — START, url(secret masked): ' . $urlForLog);
 
         // Выполняем HTTP запрос (GET запрос, как в существующем API)
         // Миграции запускаются асинхронно, поэтому нужен таймаут достаточный для установления соединения
@@ -107,6 +117,15 @@ class MigrationExecutionService
         $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
         $error = curl_error($ch);
         curl_close($ch);
+
+        error_log('[MIG] MigrationExecutionService::executeMigration — curl выполнен: HTTP ' . $httpCode . ', curl_error=' . ($error ?: 'нет'));
+        if ($error) {
+            error_log('[MIG] MigrationExecutionService::executeMigration — этап: ошибка при запросе к серверу миграции: ' . $error);
+        }
+        if ($response !== false && $response !== '' && ($httpCode < 200 || $httpCode >= 300)) {
+            $bodyPreview = strlen($response) > 300 ? substr($response, 0, 300) . '...' : $response;
+            error_log('[MIG] MigrationExecutionService::executeMigration — тело ответа (HTTP ' . $httpCode . '): ' . $bodyPreview);
+        }
 
         // Если произошла ошибка подключения, это нормально - миграция запускается в фоне
         if ($error && strpos($error, 'timeout') !== false) {
@@ -180,6 +199,10 @@ class MigrationExecutionService
         $results = [];
         $migrationMap = []; // Маппинг curl handle -> индекс миграции
 
+        // Базовый URL веб-хука (сервер миграции вызовет его по завершении каждой миграции)
+        $dashboardBaseUrl = $_ENV['DASHBOARD_BASE_URL'] ?? getenv('DASHBOARD_BASE_URL') ?: 'http://localhost:8088';
+        $baseWebhookUrl = rtrim($dashboardBaseUrl, '/') . '/api/webhooks/migration-result';
+
         try {
             while (!empty($pending) || !empty($activeHandles)) {
                 // Добавляем новые запросы до достижения batch_size
@@ -227,6 +250,13 @@ class MigrationExecutionService
                         if (!empty($migration['wave_id'])) {
                             $queryParams['wave_id'] = $migration['wave_id'];
                         }
+
+                        // Параметры веб-хука для обратного вызова
+                        $queryParams['webhook_url'] = !empty($migration['webhook_url'])
+                            ? $migration['webhook_url']
+                            : $baseWebhookUrl;
+                        $queryParams['webhook_mb_project_uuid'] = $migration['mb_project_uuid'];
+                        $queryParams['webhook_brz_project_id'] = (int)$migration['brz_project_id'];
 
                         $url = $this->migrationApiUrl . '/?' . http_build_query($queryParams);
 

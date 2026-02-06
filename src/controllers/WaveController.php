@@ -233,6 +233,27 @@ class WaveController
     }
 
     /**
+     * POST /api/waves/:id/reset-status
+     * Сбросить статус волны и всех миграций на pending (разблокирует перезапуск).
+     */
+    public function resetStatus(Request $request, string $id): JsonResponse
+    {
+        try {
+            $result = $this->waveService->resetWaveStatus($id);
+            return new JsonResponse([
+                'success' => $result['success'],
+                'message' => $result['message'],
+                'data' => $result,
+            ], 200);
+        } catch (Exception $e) {
+            return new JsonResponse([
+                'success' => false,
+                'error' => $e->getMessage(),
+            ], 500);
+        }
+    }
+
+    /**
      * POST /api/waves/:id/migrations/:mb_uuid/restart
      * Перезапустить миграцию в волне
      */
@@ -484,6 +505,9 @@ class WaveController
             }
             if (isset($data['mb_secret'])) {
                 $params['mb_secret'] = $data['mb_secret'];
+            }
+            if (isset($data['quality_analysis'])) {
+                $params['quality_analysis'] = (bool)$data['quality_analysis'];
             }
 
             $result = $this->waveService->restartAllMigrationsInWave($id, $mbUuids, $params);

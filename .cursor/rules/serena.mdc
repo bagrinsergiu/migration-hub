@@ -1,0 +1,34 @@
+---
+description: Использование Serena MCP для навигации и точечного редактирования кода
+alwaysApply: true
+---
+
+# Работа с Serena MCP
+
+Если в сессии доступны инструменты Serena (MCP-сервер `serena` подключён):
+
+1. **Активация проекта**  
+   В начале работы с кодом вызови `activate_project` с путём проекта: `/media/worker/STORE/P_DEV/migration-hub` (или именем `migration-hub`, если проект уже зарегистрирован).
+
+2. **Навигация по коду**  
+   Предпочитай инструменты Serena для поиска по коду:
+   - `find_symbol` — поиск символов (классы, методы, функции) по имени или подстроке.
+   - `get_symbols_overview` — обзор символов в файле (без чтения всего файла).
+   - `find_referencing_symbols` / `find_referencing_code_snippets` — кто ссылается на символ.
+
+3. **Редактирование**  
+   Для точечных правок используй:
+   - `replace_symbol_body` — замена тела символа (метода, функции, класса).
+   - `insert_after_symbol` / `insert_before_symbol` — вставка после/до символа.
+   - `replace_lines` / `delete_lines` — замена или удаление диапазона строк.
+
+4. **Память проекта**  
+   Для онбординга и важного контекста:
+   - `check_onboarding_performed` — проверка, выполнен ли онбординг.
+   - `onboarding` — запуск онбординга (если ещё не выполнялся).
+   - `write_memory` / `read_memory` / `list_memories` — сохранение и чтение памяти по проекту.
+
+5. **Языки**  
+   В проекте включены языки PHP и TypeScript; Serena использует соответствующие language server’ы для `src/` и `frontend/src/`.
+
+Если инструменты Serena недоступны, используй обычные средства (grep, read_file, search_replace и т.д.).

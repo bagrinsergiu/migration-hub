@@ -19,6 +19,8 @@ services:
     environment:
       APP_ENV: ${APP_ENV:-production}
       APP_DEBUG: ${APP_DEBUG:-0}
+      # URL дашборда для вебхуков (сервер миграции стучится сюда). Если дашборд и сервер миграции в одной Docker-сети — используйте http://dashboard:80
+      DASHBOARD_BASE_URL: ${DASHBOARD_BASE_URL:-http://dashboard:80}
       # Database
       MG_DB_HOST: ${MG_DB_HOST:-localhost}
       MG_DB_NAME: ${MG_DB_NAME:-migration_db}
@@ -33,6 +35,7 @@ services:
       BRIZY_CLOUD_HOST: ${BRIZY_CLOUD_HOST:-${BRIZY_HOST:-https://admin.brizy.io}}
     volumes:
       - ./:/project
+      - ./.docker/nginx/nginx.conf:/etc/nginx/sites-enabled/default:ro
       - ./var/log:/project/var/log
       - ./var/cache:/project/var/cache
       - ./var/tmp:/project/var/tmp

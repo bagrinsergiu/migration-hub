@@ -95,17 +95,20 @@ class DatabaseService
     }
 
     /**
-     * Получить список миграций из новой таблицы migrations
-     * 
+     * Получить список миграций из таблицы migrations
+     *
+     * @param int|null $limit Максимум записей (по умолчанию 1000 для быстрого отклика API)
      * @return array
      * @throws Exception
      */
-    public function getMigrationsList(): array
+    public function getMigrationsList(?int $limit = 1000): array
     {
         $db = $this->getWriteConnection();
-        return $db->getAllRows(
-            'SELECT * FROM migrations ORDER BY created_at DESC'
-        );
+        $sql = 'SELECT * FROM migrations ORDER BY created_at DESC';
+        if ($limit !== null && $limit > 0) {
+            $sql .= ' LIMIT ' . (int)$limit;
+        }
+        return $db->getAllRows($sql);
     }
 
     /**
@@ -258,19 +261,65 @@ class DatabaseService
             }
         }
 
-        // Сохраняем в старую таблицу для обратной совместимости
-        $oldId = $db->insert('migration_result_list', [
-            'migration_uuid' => $data['migration_uuid'],
-            'brz_project_id' => (int)$data['brz_project_id'],
-            'brizy_project_domain' => $data['brizy_project_domain'] ?? '',
-            'mb_project_uuid' => $data['mb_project_uuid'],
-            'result_json' => is_string($data['result_json']) ? $data['result_json'] : json_encode($data['result_json'])
-        ]);
+        // Сохраняем в старую таблицу: обновляем существующую запись по brz_project_id+mb_project_uuid,
+        // чтобы статус миграции не терялся (раньше всегда делался INSERT и создавались дубликаты)
+        $oldId = $this->upsertMigrationResultByBrzAndMb(
+            (int)$data['brz_project_id'],
+            $data['mb_project_uuid'],
+            [
+                'migration_uuid' => $data['migration_uuid'],
+                'brizy_project_domain' => $data['brizy_project_domain'] ?? '',
+                'result_json' => is_string($data['result_json']) ? $data['result_json'] : json_encode($data['result_json'])
+            ]
+        );
 
         // Сохраняем в новую таблицу migrations
         $this->saveMigration($data);
 
         return $oldId;
+    }
+
+    /**
+     * Обновить или вставить запись в migration_result_list по brz_project_id и mb_project_uuid.
+     * Используется при приёме вебхука: обновляем существующую запись, чтобы статус миграции менялся.
+     *
+     * @param int $brzProjectId
+     * @param string $mbProjectUuid
+     * @param array $data migration_uuid, brizy_project_domain, result_json
+     * @return int ID записи (существующей обновлённой или новой)
+     * @throws Exception
+     */
+    public function upsertMigrationResultByBrzAndMb(int $brzProjectId, string $mbProjectUuid, array $data): int
+    {
+        $db = $this->getWriteConnection();
+        $reflection = new \ReflectionClass($db);
+        $pdoProperty = $reflection->getProperty('pdo');
+        $pdoProperty->setAccessible(true);
+        $pdo = $pdoProperty->getValue($db);
+
+        $stmt = $pdo->prepare(
+            'SELECT id, migration_uuid FROM migration_result_list WHERE brz_project_id = ? AND mb_project_uuid = ? ORDER BY id DESC LIMIT 1'
+        );
+        $stmt->execute([$brzProjectId, $mbProjectUuid]);
+        $existing = $stmt->fetch(\PDO::FETCH_ASSOC);
+
+        $resultJson = isset($data['result_json'])
+            ? (is_string($data['result_json']) ? $data['result_json'] : json_encode($data['result_json']))
+            : json_encode(['status' => 'pending']);
+        $brizyProjectDomain = $data['brizy_project_domain'] ?? '';
+
+        if ($existing) {
+            $pdo->prepare('UPDATE migration_result_list SET brizy_project_domain = ?, result_json = ? WHERE id = ?')
+                ->execute([$brizyProjectDomain, $resultJson, $existing['id']]);
+            error_log("[MIG] DatabaseService::upsertMigrationResultByBrzAndMb — обновлена запись id={$existing['id']} для brz_project_id={$brzProjectId}, mb_project_uuid={$mbProjectUuid}");
+            return (int)$existing['id'];
+        }
+
+        $migrationUuid = $data['migration_uuid'] ?? (string)(time() . random_int(100, 999));
+        $pdo->prepare(
+            'INSERT INTO migration_result_list (migration_uuid, mb_project_uuid, brz_project_id, brizy_project_domain, result_json) VALUES (?, ?, ?, ?, ?)'
+        )->execute([$migrationUuid, $mbProjectUuid, $brzProjectId, $brizyProjectDomain, $resultJson]);
+        return (int)$pdo->lastInsertId();
     }
 
     /**
@@ -435,6 +484,45 @@ class DatabaseService
         
         $stmt = $pdo->prepare($sql);
         $stmt->execute($params);
+    }
+
+    /**
+     * Обновить или вставить запись в migration_result_list (если записи ещё нет — создаётся).
+     * Используется после создания проекта в workspace, чтобы сохранить brz_project_id.
+     *
+     * @param string $migrationUuid UUID миграции (wave_id)
+     * @param string $mbProjectUuid UUID проекта MB
+     * @param array $data Данные: brz_project_id, result_json, brizy_project_domain (опционально)
+     * @return void
+     * @throws Exception
+     */
+    public function upsertMigrationResult(string $migrationUuid, string $mbProjectUuid, array $data): void
+    {
+        $db = $this->getWriteConnection();
+        $reflection = new \ReflectionClass($db);
+        $pdoProperty = $reflection->getProperty('pdo');
+        $pdoProperty->setAccessible(true);
+        $pdo = $pdoProperty->getValue($db);
+
+        $stmt = $pdo->prepare(
+            'SELECT id FROM migration_result_list WHERE migration_uuid = ? AND mb_project_uuid = ? LIMIT 1'
+        );
+        $stmt->execute([$migrationUuid, $mbProjectUuid]);
+        $existing = $stmt->fetch(\PDO::FETCH_ASSOC);
+
+        $brzProjectId = isset($data['brz_project_id']) ? (int)$data['brz_project_id'] : 0;
+        $brizyProjectDomain = $data['brizy_project_domain'] ?? '';
+        $resultJson = isset($data['result_json'])
+            ? (is_string($data['result_json']) ? $data['result_json'] : json_encode($data['result_json']))
+            : json_encode(['status' => 'pending', 'message' => 'Проект создан']);
+
+        if ($existing) {
+            $sql = 'UPDATE migration_result_list SET brz_project_id = ?, brizy_project_domain = ?, result_json = ? WHERE id = ?';
+            $pdo->prepare($sql)->execute([$brzProjectId, $brizyProjectDomain, $resultJson, $existing['id']]);
+        } else {
+            $sql = 'INSERT INTO migration_result_list (migration_uuid, mb_project_uuid, brz_project_id, brizy_project_domain, result_json) VALUES (?, ?, ?, ?, ?)';
+            $pdo->prepare($sql)->execute([$migrationUuid, $mbProjectUuid, $brzProjectId, $brizyProjectDomain, $resultJson]);
+        }
     }
 
     /**
@@ -1129,7 +1217,25 @@ class DatabaseService
         }
         
         // Добавляем миграции из migration_result_list
+        // Фильтруем дубликаты: если есть несколько записей с одинаковым mb_project_uuid,
+        // берем только последнюю (самую свежую по created_at)
+        $uniqueMigrationResults = [];
         foreach ($migrationResults as $result) {
+            $mbUuid = $result['mb_project_uuid'];
+            if (!isset($uniqueMigrationResults[$mbUuid])) {
+                $uniqueMigrationResults[$mbUuid] = $result;
+            } else {
+                // Если уже есть запись с таким UUID, сравниваем даты и берем более свежую
+                $existingDate = strtotime($uniqueMigrationResults[$mbUuid]['created_at'] ?? '1970-01-01');
+                $newDate = strtotime($result['created_at'] ?? '1970-01-01');
+                if ($newDate > $existingDate) {
+                    $uniqueMigrationResults[$mbUuid] = $result;
+                }
+            }
+        }
+        
+        // Добавляем уникальные миграции из migration_result_list
+        foreach ($uniqueMigrationResults as $result) {
             $allMigrationResults[] = [
                 'source' => 'migration_result_list',
                 'data' => $result,
@@ -1178,6 +1284,86 @@ class DatabaseService
             }
         }
         
+        // Оптимизация: получаем все migration_id для поиска ревьюеров
+        // Сначала собираем все mb_uuid для поиска migration_id
+        $mbUuids = array_unique(array_column(array_column($allMigrationResults, 'data'), 'mb_project_uuid'));
+        $migrationIdsByMbUuid = [];
+        if (!empty($mbUuids)) {
+            $placeholders = implode(',', array_fill(0, count($mbUuids), '?'));
+            $migrations = $db->getAllRows(
+                "SELECT id, mb_project_uuid FROM migrations WHERE mb_project_uuid IN ($placeholders) AND (wave_id = ? OR wave_id IS NULL) ORDER BY (wave_id = ?) DESC, created_at DESC",
+                array_merge($mbUuids, [$waveId, $waveId])
+            );
+            // Создаем индекс по mb_project_uuid (берем первый/последний для каждого UUID)
+            foreach ($migrations as $migration) {
+                $mbUuid = $migration['mb_project_uuid'];
+                if (!isset($migrationIdsByMbUuid[$mbUuid])) {
+                    $migrationIdsByMbUuid[$mbUuid] = (int)$migration['id'];
+                }
+            }
+        }
+        
+        // Ревьюеры из migration_reviewers: приоритет по migration_id (FK), затем по uuid (mb_project_uuid)
+        $reviewersByMigrationId = [];
+        $migrationIdsForReviewers = array_values(array_unique(array_filter($migrationIdsByMbUuid)));
+        if (!empty($migrationIdsForReviewers)) {
+            $placeholders = implode(',', array_fill(0, count($migrationIdsForReviewers), '?'));
+            $reviewersByMid = $db->getAllRows(
+                "SELECT migration_id, person_brizy, uuid FROM migration_reviewers WHERE migration_id IN ($placeholders)",
+                $migrationIdsForReviewers
+            );
+            foreach ($reviewersByMid as $r) {
+                $mid = (int)$r['migration_id'];
+                if (!isset($reviewersByMigrationId[$mid])) {
+                    $reviewersByMigrationId[$mid] = [
+                        'person_brizy' => $r['person_brizy'],
+                        'uuid' => $r['uuid']
+                    ];
+                }
+            }
+        }
+        $reviewersByUuid = [];
+        if (!empty($mbUuids)) {
+            $placeholders = implode(',', array_fill(0, count($mbUuids), '?'));
+            $reviewers = $db->getAllRows(
+                "SELECT person_brizy, uuid FROM migration_reviewers WHERE uuid IN ($placeholders)",
+                $mbUuids
+            );
+            foreach ($reviewers as $reviewer) {
+                $uuid = $reviewer['uuid'];
+                if ($uuid && !isset($reviewersByUuid[$uuid])) {
+                    $reviewersByUuid[$uuid] = [
+                        'person_brizy' => $reviewer['person_brizy'],
+                        'uuid' => $reviewer['uuid']
+                    ];
+                }
+            }
+        }
+
+        // Один запрос для исправления brz_project_id по mb_uuid (избегаем N+1)
+        $needFixMbUuids = [];
+        foreach ($allMigrationResults as $migrationItem) {
+            $brzProjectId = $migrationItem['data']['brz_project_id'] ?? 0;
+            if (empty($brzProjectId) || $brzProjectId == 0 || ($brzProjectId < 1000 && $brzProjectId > 0)) {
+                $needFixMbUuids[] = $migrationItem['data']['mb_project_uuid'];
+            }
+        }
+        $correctBrzByMbUuid = [];
+        if (!empty($needFixMbUuids)) {
+            $needFixMbUuids = array_unique($needFixMbUuids);
+            $placeholders = implode(',', array_fill(0, count($needFixMbUuids), '?'));
+            $correctMappings = $db->getAllRows(
+                "SELECT mb_project_uuid, brz_project_id FROM migrations_mapping WHERE mb_project_uuid IN ($placeholders) AND brz_project_id > 1000 ORDER BY updated_at DESC",
+                $needFixMbUuids
+            );
+            foreach ($correctMappings as $row) {
+                $uuid = $row['mb_project_uuid'];
+                if (!isset($correctBrzByMbUuid[$uuid])) {
+                    $correctBrzByMbUuid[$uuid] = (int)$row['brz_project_id'];
+                }
+            }
+        }
+        
         // Для каждой миграции собираем полную информацию
         foreach ($allMigrationResults as $migrationItem) {
             $migrationResult = $migrationItem['data'];
@@ -1185,17 +1371,10 @@ class DatabaseService
             $mbUuid = $migrationResult['mb_project_uuid'];
             $brzProjectId = $migrationResult['brz_project_id'];
             
-            // ВАЖНО: Если brz_project_id из migration_result_list равен 0 или очень маленькому числу (< 1000),
-            // это может быть неправильное значение. Пытаемся найти правильный brz_project_id из migrations_mapping по mb_uuid
             if (empty($brzProjectId) || $brzProjectId == 0 || ($brzProjectId < 1000 && $brzProjectId > 0)) {
-                // Ищем правильный brz_project_id в migrations_mapping по mb_uuid
-                $correctMapping = $db->find(
-                    'SELECT brz_project_id FROM migrations_mapping WHERE mb_project_uuid = ? AND brz_project_id > 0 ORDER BY updated_at DESC LIMIT 1',
-                    [$mbUuid]
-                );
-                if ($correctMapping && !empty($correctMapping['brz_project_id']) && $correctMapping['brz_project_id'] > 1000) {
+                if (isset($correctBrzByMbUuid[$mbUuid])) {
                     $oldBrzProjectId = $brzProjectId;
-                    $brzProjectId = (int)$correctMapping['brz_project_id'];
+                    $brzProjectId = $correctBrzByMbUuid[$mbUuid];
                     error_log("[getWaveMigrations] Fixed brz_project_id for mb_uuid={$mbUuid}: {$oldBrzProjectId} -> {$brzProjectId}");
                 } else {
                     error_log("[getWaveMigrations] Warning: brz_project_id is suspicious for mb_uuid={$mbUuid}: brz_project_id={$brzProjectId}");
@@ -1275,19 +1454,6 @@ class DatabaseService
                 ?? $migrationChanges['error'] 
                 ?? null;
 
-            // Получаем ID миграции из таблицы migrations
-            $migrationId = null;
-            if ($mbUuid && $brzProjectId) {
-                // Ищем миграцию по mb_uuid и brz_project_id, с приоритетом для миграций из этой волны
-                $migrationRecord = $db->find(
-                    'SELECT id FROM migrations WHERE mb_project_uuid = ? AND brz_project_id = ? AND (wave_id = ? OR wave_id IS NULL) ORDER BY (wave_id = ?) DESC, created_at DESC LIMIT 1',
-                    [$mbUuid, $brzProjectId, $waveId, $waveId]
-                );
-                if ($migrationRecord) {
-                    $migrationId = (int)$migrationRecord['id'];
-                }
-            }
-            
             // Если brz_project_id равен 0 или null, пытаемся получить его из result_json
             if (empty($brzProjectId) || $brzProjectId == 0) {
                 if (isset($resultValue['brizy_project_id']) && !empty($resultValue['brizy_project_id'])) {
@@ -1295,6 +1461,41 @@ class DatabaseService
                 } elseif (isset($migrationChanges['brizy_project_id']) && !empty($migrationChanges['brizy_project_id'])) {
                     $brzProjectId = (int)$migrationChanges['brizy_project_id'];
                 }
+            }
+            
+            // Получаем ID миграции из таблицы migrations
+            // Сначала проверяем предзагруженные данные
+            $migrationId = $migrationIdsByMbUuid[$mbUuid] ?? null;
+            
+            // Если не нашли в предзагруженных данных, ищем вручную
+            if (!$migrationId && $mbUuid) {
+                if ($brzProjectId && $brzProjectId > 0) {
+                    // Ищем миграцию по mb_uuid и brz_project_id, с приоритетом для миграций из этой волны
+                    $migrationRecord = $db->find(
+                        'SELECT id FROM migrations WHERE mb_project_uuid = ? AND brz_project_id = ? AND (wave_id = ? OR wave_id IS NULL) ORDER BY (wave_id = ?) DESC, created_at DESC LIMIT 1',
+                        [$mbUuid, $brzProjectId, $waveId, $waveId]
+                    );
+                    if ($migrationRecord) {
+                        $migrationId = (int)$migrationRecord['id'];
+                    }
+                } else {
+                    // Если brz_project_id нет, ищем только по mb_uuid и wave_id
+                    $migrationRecord = $db->find(
+                        'SELECT id FROM migrations WHERE mb_project_uuid = ? AND (wave_id = ? OR wave_id IS NULL) ORDER BY (wave_id = ?) DESC, created_at DESC LIMIT 1',
+                        [$mbUuid, $waveId, $waveId]
+                    );
+                    if ($migrationRecord) {
+                        $migrationId = (int)$migrationRecord['id'];
+                    }
+                }
+            }
+            
+            // Ревьюер из migration_reviewers: сначала по migration_id (FK), иначе по uuid
+            $reviewer = null;
+            if ($migrationId && isset($reviewersByMigrationId[$migrationId])) {
+                $reviewer = $reviewersByMigrationId[$migrationId];
+            } elseif ($mbUuid && isset($reviewersByUuid[$mbUuid])) {
+                $reviewer = $reviewersByUuid[$mbUuid];
             }
             
             // Собираем полную информацию о миграции
@@ -1308,6 +1509,7 @@ class DatabaseService
                 'migration_uuid' => $migrationResult['migration_uuid'],
                 'migration_id' => $migrationId,
                 'cloning_enabled' => (bool)($migrationMapping['cloning_enabled'] ?? false),
+                'reviewer' => $reviewer, // Информация о ревьюере
             ];
 
             // Добавляем дополнительные данные из result_json если есть
@@ -1337,6 +1539,14 @@ class DatabaseService
 
             $migrations[] = $migrationData;
         }
+
+        // Финальная дедупликация: удаляем дубликаты по mb_project_uuid (оставляем последнюю запись)
+        $uniqueMigrationsByUuid = [];
+        foreach ($migrations as $migration) {
+            $mbUuid = $migration['mb_project_uuid'];
+            $uniqueMigrationsByUuid[$mbUuid] = $migration;
+        }
+        $migrations = array_values($uniqueMigrationsByUuid);
 
         return $migrations;
     }
@@ -1383,21 +1593,47 @@ class DatabaseService
             $mappingsByBrzId[$mapping['brz_project_id']] = $mapping;
         }
         
+        // Получаем ревьюеров по UUID из migration_reviewers
+        $mbUuids = array_unique(array_column($migrationResults, 'mb_project_uuid'));
+        $reviewersByUuid = [];
+        if (!empty($mbUuids)) {
+            $reviewersPlaceholders = implode(',', array_fill(0, count($mbUuids), '?'));
+            $reviewers = $db->getAllRows(
+                "SELECT person_brizy, uuid FROM migration_reviewers WHERE uuid IN ($reviewersPlaceholders)",
+                $mbUuids
+            );
+            // Создаем индекс по UUID (может быть несколько ревьюеров для одного UUID, берем первый)
+            foreach ($reviewers as $reviewer) {
+                $uuid = $reviewer['uuid'];
+                if ($uuid && !isset($reviewersByUuid[$uuid])) {
+                    $reviewersByUuid[$uuid] = [
+                        'person_brizy' => $reviewer['person_brizy'],
+                        'uuid' => $reviewer['uuid']
+                    ];
+                }
+            }
+        }
+        
         // Объединяем данные из migration_result_list и migrations_mapping
         $result = [];
         foreach ($migrationResults as $migrationResult) {
             $brzProjectId = $migrationResult['brz_project_id'];
+            $mbUuid = $migrationResult['mb_project_uuid'];
             $mapping = $mappingsByBrzId[$brzProjectId] ?? null;
+            
+            // Получаем ревьюера по UUID
+            $reviewer = isset($reviewersByUuid[$mbUuid]) ? $reviewersByUuid[$mbUuid] : null;
             
             if (!$mapping) {
                 // Если маппинга нет, создаем базовую запись из migration_result_list
                 $result[] = [
                     'id' => null,
                     'brz_project_id' => $brzProjectId,
-                    'mb_project_uuid' => $migrationResult['mb_project_uuid'],
+                    'mb_project_uuid' => $mbUuid,
                     'brizy_project_domain' => $migrationResult['brizy_project_domain'] ?? null,
                     'changes_json' => null,
                     'cloning_enabled' => false,
+                    'reviewer' => $reviewer,
                     'created_at' => $migrationResult['created_at'],
                     'updated_at' => $migrationResult['created_at'],
                 ];
@@ -1416,6 +1652,7 @@ class DatabaseService
                     ?? null,
                 'changes_json' => $changesJson,
                 'cloning_enabled' => (bool)($mapping['cloning_enabled'] ?? false),
+                'reviewer' => $reviewer,
                 'created_at' => $mapping['created_at'],
                 'updated_at' => $mapping['updated_at'],
             ];

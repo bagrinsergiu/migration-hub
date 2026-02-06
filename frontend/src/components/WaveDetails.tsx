@@ -26,8 +26,9 @@ export default function WaveDetails() {
   const waveLogsContentRef = useRef<HTMLDivElement>(null);
   const [removingLock, setRemovingLock] = useState<string | null>(null);
   const [restartingAll, setRestartingAll] = useState(false);
+  const [resettingWave, setResettingWave] = useState(false);
+  const [restartWithQualityAnalysis, setRestartWithQualityAnalysis] = useState(false);
   const [selectedMigrations, setSelectedMigrations] = useState<Set<string>>(new Set());
-  const [togglingCloning, setTogglingCloning] = useState<number | null>(null);
 
   const loadDetails = async () => {
     if (!id) return;
@@ -64,11 +65,10 @@ export default function WaveDetails() {
       const response = await api.getWaveDetails(id);
       if (response.success && response.data) {
         setDetails(response.data);
-      } else if (response.error) {
-        console.error('Error refreshing wave details:', response.error);
       }
-    } catch (err: any) {
-      console.error('Error refreshing wave details:', err);
+      // Не логируем ошибки фонового refresh — они ожидаемы при недоступности бэкенда
+    } catch {
+      // Игнорируем — фоновое обновление, данные остаются из кэша
     } finally {
       setAutoRefreshing(false);
     }
@@ -95,16 +95,15 @@ export default function WaveDetails() {
     return () => clearInterval(interval);
   }, [details, id]);
 
-  const handleRestartMigration = async (mbUuid: string) => {
+  const handleRestartMigration = async (mbUuid: string, withQualityAnalysis: boolean) => {
     if (!id) return;
     try {
       setRestarting(mbUuid);
       setError(null);
-      
-      const response = await api.restartWaveMigration(id, mbUuid);
-      
+      const response = await api.restartWaveMigration(id, mbUuid, { quality_analysis: withQualityAnalysis });
       if (response.success) {
-        // Перезагружаем детали
+        const msg = (response.data as any)?.message || 'Миграция перезапущена';
+        alert(msg);
         await loadDetails();
       } else {
         setError(response.error || 'Ошибка перезапуска миграции');
@@ -144,35 +143,6 @@ export default function WaveDetails() {
     }
   };
 
-  const handleToggleCloning = async (brzProjectId: number, currentValue: boolean) => {
-    if (!id) return;
-    
-    setTogglingCloning(brzProjectId);
-    try {
-      const newValue = !currentValue;
-      const response = await api.toggleCloning(id, brzProjectId, newValue);
-      
-      if (response.success) {
-        // Обновляем локальное состояние
-        if (details) {
-          setDetails({
-            ...details,
-            migrations: details.migrations.map(m => 
-              m.brz_project_id === brzProjectId 
-                ? { ...m, cloning_enabled: newValue }
-                : m
-            )
-          });
-        }
-      } else {
-        setError(response.error || 'Ошибка обновления параметра клонирования');
-      }
-    } catch (err: any) {
-      setError(err.message || 'Ошибка обновления параметра клонирования');
-    } finally {
-      setTogglingCloning(null);
-    }
-  };
 
   const loadLogs = useCallback(async (mbUuid: string) => {
     if (!id) return;
@@ -336,9 +306,40 @@ export default function WaveDetails() {
 
   if (loading && !details) {
     return (
-      <div className="loading-container">
-        <div className="spinner"></div>
-        <p>Загрузка деталей волны...</p>
+      <div className="wave-details wave-details-skeleton">
+        <div className="page-header">
+          <div className="skeleton skeleton-btn" style={{ width: 100 }} />
+          <div className="skeleton skeleton-title" style={{ width: 280, height: 28 }} />
+          <div className="skeleton skeleton-badge" style={{ width: 100, height: 24 }} />
+        </div>
+        <div className="details-grid">
+          <div className="card">
+            <div className="card-header">
+              <div className="skeleton" style={{ width: 180, height: 20 }} />
+            </div>
+            <div className="info-grid">
+              {[1, 2, 3, 4, 5].map((i) => (
+                <div key={i} className="info-item">
+                  <div className="skeleton" style={{ width: 90, height: 16 }} />
+                  <div className="skeleton" style={{ width: 140, height: 16 }} />
+                </div>
+              ))}
+            </div>
+          </div>
+          <div className="card">
+            <div className="card-header">
+              <div className="skeleton" style={{ width: 220, height: 20 }} />
+            </div>
+            <div className="skeleton skeleton-table">
+              <div className="skeleton-line" />
+              <div className="skeleton-line" />
+              <div className="skeleton-line" />
+              <div className="skeleton-line" />
+              <div className="skeleton-line" />
+            </div>
+          </div>
+        </div>
+        <p className="skeleton-loading-text">Загрузка деталей волны...</p>
       </div>
     );
   }
@@ -463,7 +464,7 @@ export default function WaveDetails() {
             )}
             <div className="info-item">
               <span className="info-label">Действия:</span>
-              <span className="info-value" style={{ display: 'flex', flexDirection: 'row', gap: '0.5rem', flexWrap: 'wrap' }}>
+              <span className="info-value" style={{ display: 'flex', flexDirection: 'row', gap: '0.5rem', flexWrap: 'wrap', alignItems: 'center' }}>
                 <Link
                   to={`/wave/${id}/mapping`}
                   className="btn btn-primary"
@@ -479,28 +480,66 @@ export default function WaveDetails() {
                 </button>
                 <button
                   onClick={async () => {
+                    if (!confirm('Сбросить статус волны и всех миграций на «ожидание»? После этого можно перезапустить миграции.')) {
+                      return;
+                    }
+                    try {
+                      setResettingWave(true);
+                      setError(null);
+                      const response = await api.resetWaveStatus(id!);
+                      if (response.success) {
+                        const message = (response.data as any)?.message || 'Статус волны сброшен';
+                        alert(message);
+                        await loadDetails();
+                      } else {
+                        setError(response.error || 'Ошибка сброса статуса');
+                      }
+                    } catch (err: any) {
+                      setError(err.message || 'Ошибка сброса статуса');
+                    } finally {
+                      setResettingWave(false);
+                    }
+                  }}
+                  className="btn btn-outline-secondary"
+                  disabled={resettingWave}
+                  title="Сбросить статус волны и миграций на «ожидание» (разблокирует перезапуск)"
+                >
+                  {resettingWave ? 'Сброс...' : '↺ Сбросить статус волны'}
+                </button>
+                <label style={{ display: 'inline-flex', alignItems: 'center', gap: '0.35rem', marginLeft: '0.5rem' }}>
+                  <input
+                    type="checkbox"
+                    checked={restartWithQualityAnalysis}
+                    onChange={(e) => setRestartWithQualityAnalysis(e.target.checked)}
+                    title="Включить анализ AI при массовом перезапуске"
+                  />
+                  <span>С анализом AI</span>
+                </label>
+                <button
+                  onClick={async () => {
                     if (!confirm('Вы уверены, что хотите перезапустить ВСЕ миграции в этой волне? Это очистит кэш и БД записи и запустит миграции заново.')) {
                       return;
                     }
                     try {
                       setRestartingAll(true);
                       setError(null);
-                      const response = await api.restartAllWaveMigrations(id!);
+                      const response = await api.restartAllWaveMigrations(id!, undefined, { quality_analysis: restartWithQualityAnalysis });
                       if (response.success) {
-                        const message = (response.data as any)?.message || 'Массовый перезапуск запущен';
+                        const n = details.migrations.length;
+                        const message = (response.data as any)?.message || (n === 1 ? 'Запущен перезапуск 1 миграции' : `Запущен перезапуск ${n} миграций`);
                         alert(message);
                         await loadDetails();
                       } else {
-                        setError(response.error || 'Ошибка массового перезапуска');
+                        setError(response.error || 'Ошибка перезапуска');
                       }
                     } catch (err: any) {
-                      setError(err.message || 'Ошибка массового перезапуска');
+                      setError(err.message || 'Ошибка перезапуска');
                     } finally {
                       setRestartingAll(false);
                     }
                   }}
                   className="btn btn-warning"
-                  disabled={restartingAll || details.wave.status === 'in_progress'}
+                  disabled={restartingAll}
                   title="Перезапустить все миграции в волне (очистит кэш и БД записи)"
                 >
                   {restartingAll ? 'Перезапуск...' : '🔄 Перезапустить все миграции'}
@@ -515,23 +554,24 @@ export default function WaveDetails() {
                       try {
                         setRestartingAll(true);
                         setError(null);
-                        const response = await api.restartAllWaveMigrations(id!, Array.from(selectedMigrations));
+                        const response = await api.restartAllWaveMigrations(id!, Array.from(selectedMigrations), { quality_analysis: restartWithQualityAnalysis });
                         if (response.success) {
-                          const message = (response.data as any)?.message || 'Массовый перезапуск запущен';
+                          const k = selectedMigrations.size;
+                          const message = (response.data as any)?.message || (k === 1 ? 'Запущен перезапуск 1 миграции' : `Запущен перезапуск ${k} миграций`);
                           alert(message);
                           setSelectedMigrations(new Set());
                           await loadDetails();
                         } else {
-                          setError(response.error || 'Ошибка массового перезапуска');
+                          setError(response.error || 'Ошибка перезапуска');
                         }
                       } catch (err: any) {
-                        setError(err.message || 'Ошибка массового перезапуска');
+                        setError(err.message || 'Ошибка перезапуска');
                       } finally {
                         setRestartingAll(false);
                       }
                     }}
                     className="btn btn-info"
-                    disabled={restartingAll || details.wave.status === 'in_progress'}
+                    disabled={restartingAll}
                     title={`Перезапустить ${selectedMigrations.size} выбранных миграций`}
                   >
                     {restartingAll ? 'Перезапуск...' : `🔄 Перезапустить выбранные (${selectedMigrations.size})`}
@@ -558,44 +598,49 @@ export default function WaveDetails() {
           <div className="card-header">
             <h3 className="card-title">Миграции в волне</h3>
           </div>
-          {details.migrations.length === 0 ? (
-            <p className="empty-message">Миграции еще не начаты</p>
-          ) : (
-            <div className="migrations-table-container">
-              <table className="migrations-table">
-                <thead>
+          <div className="migrations-table-container">
+            <table className="migrations-table">
+              <thead>
+                <tr>
+                  <th>
+                    <input
+                      type="checkbox"
+                      checked={details.migrations.length > 0 && selectedMigrations.size === details.migrations.length}
+                      onChange={(e) => {
+                        if (e.target.checked) {
+                          setSelectedMigrations(new Set(details.migrations.map(m => m.mb_project_uuid)));
+                        } else {
+                          setSelectedMigrations(new Set());
+                        }
+                      }}
+                      title="Выбрать все"
+                      disabled={details.migrations.length === 0}
+                    />
+                  </th>
+                  <th>MB Project UUID</th>
+                  <th>Brizy Project ID</th>
+                  <th>Статус</th>
+                  <th>Domain</th>
+                  <th>Ревьюер</th>
+                  <th>Прогресс</th>
+                  <th>Дата</th>
+                  <th>Действия</th>
+                </tr>
+              </thead>
+              <tbody>
+                {details.migrations.length === 0 ? (
                   <tr>
-                    <th>
-                      <input
-                        type="checkbox"
-                        checked={selectedMigrations.size === details.migrations.length && details.migrations.length > 0}
-                        onChange={(e) => {
-                          if (e.target.checked) {
-                            setSelectedMigrations(new Set(details.migrations.map(m => m.mb_project_uuid)));
-                          } else {
-                            setSelectedMigrations(new Set());
-                          }
-                        }}
-                        title="Выбрать все"
-                      />
-                    </th>
-                    <th>MB Project UUID</th>
-                    <th>Brizy Project ID</th>
-                    <th>Статус</th>
-                    <th>Domain</th>
-                    <th>Клонирование</th>
-                    <th>Прогресс</th>
-                    <th>Дата</th>
-                    <th>Действия</th>
+                    <td colSpan={9} className="empty-message" style={{ textAlign: 'center', padding: '1.5rem', color: '#666' }}>
+                      Миграции еще не начаты или не загружены
+                    </td>
                   </tr>
-                </thead>
-                <tbody>
-                  {details.migrations.map((migration, index) => {
+                ) : (
+                  details.migrations.map((migration, index) => {
                     const migrationStatusConfig = getStatusConfig(migration.status as any);
                     const progress = migration.result_data?.progress;
                     const isSelected = selectedMigrations.has(migration.mb_project_uuid);
                     return (
-                      <tr key={migration.mb_project_uuid || index} style={isSelected ? { backgroundColor: '#e3f2fd' } : {}}>
+                      <tr key={`${migration.mb_project_uuid}-${index}`} style={isSelected ? { backgroundColor: '#e3f2fd' } : {}}>
                         <td>
                           <input
                             type="checkbox"
@@ -660,24 +705,12 @@ export default function WaveDetails() {
                           )}
                         </td>
                         <td>
-                          {migration.brz_project_id ? (
-                            <label className="toggle-switch">
-                              <input
-                                type="checkbox"
-                                checked={migration.cloning_enabled ?? false}
-                                onChange={() => handleToggleCloning(
-                                  migration.brz_project_id!,
-                                  migration.cloning_enabled ?? false
-                                )}
-                                disabled={togglingCloning === migration.brz_project_id}
-                              />
-                              <span className="toggle-slider"></span>
-                              <span className="toggle-label">
-                                {migration.cloning_enabled ? 'Вкл' : 'Выкл'}
-                              </span>
-                            </label>
+                          {migration.reviewer?.person_brizy ? (
+                            <span className="reviewer-name" title={`UUID: ${migration.reviewer.uuid || migration.mb_project_uuid}`}>
+                              {migration.reviewer.person_brizy}
+                            </span>
                           ) : (
-                            '-'
+                            '—'
                           )}
                         </td>
                         <td>
@@ -704,12 +737,21 @@ export default function WaveDetails() {
                             {migration.brz_project_id && (
                               <>
                                 <button
-                                  onClick={() => handleRestartMigration(migration.mb_project_uuid)}
+                                  onClick={() => handleRestartMigration(migration.mb_project_uuid, false)}
                                   className="btn btn-sm btn-primary"
                                   disabled={restarting === migration.mb_project_uuid}
-                                  title="Перезапустить миграцию"
+                                  title="Перезапустить миграцию без анализа AI"
                                 >
                                   {restarting === migration.mb_project_uuid ? '...' : '↻'}
+                                </button>
+                                <button
+                                  onClick={() => handleRestartMigration(migration.mb_project_uuid, true)}
+                                  className="btn btn-sm btn-primary"
+                                  disabled={restarting === migration.mb_project_uuid}
+                                  title="Перезапустить миграцию с анализом AI"
+                                  style={{ marginLeft: '0.2rem' }}
+                                >
+                                  {restarting === migration.mb_project_uuid ? '...' : '↻ AI'}
                                 </button>
                                 <button
                                   onClick={() => handleRemoveLock(migration.mb_project_uuid)}
@@ -745,11 +787,12 @@ export default function WaveDetails() {
                         </td>
                       </tr>
                     );
-                  })}
-                </tbody>
-              </table>
-            </div>
-          )}
+                  })
+                )}
+              </tbody>
+            </table>
+          </div>
+        </div>
 
           {/* Модальное окно для логов */}
           {showLogs && (
@@ -862,12 +905,10 @@ export default function WaveDetails() {
                       )}
                     </div>
                   )}
-                </div>
-              </div>
             </div>
-          )}
+          </div>
         </div>
-      </div>
+      )}
 
       {/* Модальное окно для логов волны */}
       {showWaveLogs && (
@@ -975,6 +1016,7 @@ export default function WaveDetails() {
           </div>
         </div>
       )}
+      </div>
     </div>
   );
 }
