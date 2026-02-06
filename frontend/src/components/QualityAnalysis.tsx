@@ -334,7 +334,7 @@ export default function QualityAnalysis() {
                       return sourceFilename ? (
                         <div style={{ flex: 1, border: '1px solid #e0e0e0', borderRadius: '4px', overflow: 'hidden', backgroundColor: '#f9fafb', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
                           <img 
-                            src={api.getScreenshotUrl(sourceFilename)}
+                            src={api.getScreenshotSrc(report.screenshots_path.source)}
                             alt="Исходная страница"
                             style={{ width: '100%', height: '100%', objectFit: 'contain', display: 'block', maxHeight: '150px' }}
                             onError={(e) => {
@@ -349,7 +349,7 @@ export default function QualityAnalysis() {
                       return migratedFilename ? (
                         <div style={{ flex: 1, border: '1px solid #e0e0e0', borderRadius: '4px', overflow: 'hidden', backgroundColor: '#f9fafb', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
                           <img 
-                            src={api.getScreenshotUrl(migratedFilename)}
+                            src={api.getScreenshotSrc(report.screenshots_path.migrated)}
                             alt="Мигрированная страница"
                             style={{ width: '100%', height: '100%', objectFit: 'contain', display: 'block', maxHeight: '150px' }}
                             onError={(e) => {
@@ -650,7 +650,7 @@ export function PageAnalysisDetails({ migrationId, pageSlug, onClose }: PageAnal
                   <div className="screenshot-item">
                     <h4>Исходная страница</h4>
                     <img
-                      src={api.getScreenshotUrl(sourceFilename)}
+                      src={api.getScreenshotSrc(sourceScreenshot)}
                       alt="Source screenshot"
                       className="screenshot-image"
                       onError={(e) => {
@@ -664,7 +664,7 @@ export function PageAnalysisDetails({ migrationId, pageSlug, onClose }: PageAnal
                   <div className="screenshot-item">
                     <h4>Мигрированная страница</h4>
                     <img
-                      src={api.getScreenshotUrl(migratedFilename)}
+                      src={api.getScreenshotSrc(migratedScreenshot)}
                       alt="Migrated screenshot"
                       className="screenshot-image"
                       onError={(e) => {

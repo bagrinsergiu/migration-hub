@@ -136,10 +136,12 @@ class ApiProxyService
      */
     public function runMigration(array $params): array
     {
+        error_log('[MIG] ApiProxyService::runMigration — START, baseUrl=' . $this->baseUrl);
         // Обязательные параметры
         $required = ['mb_project_uuid', 'brz_project_id', 'mb_site_id', 'mb_secret'];
         foreach ($required as $key) {
             if (empty($params[$key])) {
+                error_log('[MIG] ApiProxyService::runMigration — ошибка: отсутствует параметр ' . $key);
                 throw new Exception("Обязательный параметр отсутствует: {$key}");
             }
         }
@@ -157,10 +159,13 @@ class ApiProxyService
         $skipHealthCheck = isset($params['skip_health_check']) && $params['skip_health_check'] === true;
         $healthCheck = null;
         if (!$skipHealthCheck) {
+            error_log('[MIG] ApiProxyService::runMigration — проверка health: ' . $this->baseUrl . '/health');
             $healthCheck = $this->checkMigrationServerHealth();
             if (!$healthCheck['available']) {
-                error_log("[ApiProxyService::runMigration] Сервер миграции недоступен, но продолжаем попытку запуска миграции");
+                error_log("[MIG] ApiProxyService::runMigration — этап: health check неуспешен — " . ($healthCheck['message'] ?? 'недоступен') . ", продолжаем попытку запуска");
                 // Не прерываем выполнение, но добавим предупреждение в ответ
+            } else {
+                error_log('[MIG] ApiProxyService::runMigration — health check OK');
             }
         }
 
@@ -239,7 +244,14 @@ class ApiProxyService
         curl_close($ch);
         
         // Логируем результат
-        error_log("[ApiProxyService::runMigration] HTTP код: {$httpCode}, ошибка: " . ($error ?: 'нет'));
+        error_log("[MIG] ApiProxyService::runMigration — curl выполнен: HTTP {$httpCode}, curl_error=" . ($error ?: 'нет'));
+        if ($error) {
+            error_log("[MIG] ApiProxyService::runMigration — этап: запрос к серверу миграции завершился с ошибкой curl: " . $error);
+        }
+        if ($response !== false && $response !== '' && ($httpCode < 200 || $httpCode >= 300)) {
+            $bodyPreview = strlen($response) > 500 ? substr($response, 0, 500) . '...' : $response;
+            error_log("[MIG] ApiProxyService::runMigration — тело ответа (HTTP {$httpCode}): " . $bodyPreview);
+        }
         
         // Если произошла ошибка подключения или таймаут, это нормально - миграция запускается в фоне
         if ($error) {
@@ -315,6 +327,7 @@ class ApiProxyService
         
         // Если ответ успешный, возвращаем его
         if ($httpCode >= 200 && $httpCode < 300) {
+            error_log("[MIG] ApiProxyService::runMigration — этап: запрос выполнен успешно, HTTP {$httpCode}");
             $responseData = [
                 'success' => true,
                 'http_code' => $httpCode,
@@ -337,6 +350,7 @@ class ApiProxyService
         }
         
         // Если ошибка, возвращаем её
+        error_log("[MIG] ApiProxyService::runMigration — этап: сервер миграции вернул ошибку HTTP {$httpCode}, success=false");
         return [
             'success' => false,
             'http_code' => $httpCode,
@@ -516,6 +530,16 @@ class ApiProxyService
                     }
                     
                     error_log('Migration status updated in DB: ' . $status . ' for brz_project_id: ' . $brzProjectId);
+                    
+                    // При успешном завершении — записать URL в колонку Website-Brizy привязанной таблицы
+                    if ($status === 'completed' && !empty($metaData['brizy_project_domain'])) {
+                        try {
+                            $googleSheetsService = new \Dashboard\Services\GoogleSheetsService();
+                            $googleSheetsService->updateWebsiteBrizyForMigration($mbProjectUuid, $metaData['brizy_project_domain']);
+                        } catch (\Exception $e) {
+                            error_log('[ApiProxyService::runMigration] updateWebsiteBrizyForMigration: ' . $e->getMessage());
+                        }
+                    }
                     
                     // Если это тестовая миграция с элементом, сохраняем результат секции
                     if (!empty($params['mb_element_name'])) {

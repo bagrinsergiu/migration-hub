@@ -151,8 +151,11 @@ if (strpos($pathInfo, '/api') === 0) {
             exit;
         }
         
-        // Загружаем роутер (он возвращает функцию)
+        // Загружаем роутер (он возвращает функцию). Передаём корень проекта, чтобы API использовал те же пути.
         try {
+            if (!defined('DASHBOARD_PROJECT_ROOT')) {
+                define('DASHBOARD_PROJECT_ROOT', $projectRoot);
+            }
             $router = require $projectRoot . '/src/index.php';
         } catch (\Throwable $e) {
             error_log("CRITICAL: Failed to load router: " . $e->getMessage());

@@ -176,11 +176,6 @@ export const api = {
     return response.data;
   },
 
-  async getMigrationStatus(id: number): Promise<ApiResponse<MigrationDetails>> {
-    const response = await apiClient.get(`/migrations/${id}/status`);
-    return response.data;
-  },
-
   async runMigration(params: RunMigrationParams): Promise<ApiResponse<any>> {
     try {
       const response = await apiClient.post('/migrations/run', params);
@@ -307,6 +302,11 @@ export const api = {
         return response.data;
       },
 
+      async resetWaveStatus(waveId: string): Promise<ApiResponse<{ message?: string; wave_status?: string }>> {
+        const response = await apiClient.post(`/waves/${waveId}/reset-status`);
+        return response.data;
+      },
+
       async getWaveMapping(id: string): Promise<ApiResponse<WaveMapping[]>> {
         const response = await apiClient.get(`/waves/${id}/mapping`);
         return response.data;
@@ -317,14 +317,15 @@ export const api = {
         return response.data;
       },
 
-      async restartWaveMigration(waveId: string, mbUuid: string, params?: { mb_site_id?: number; mb_secret?: string }): Promise<ApiResponse<any>> {
+      async restartWaveMigration(waveId: string, mbUuid: string, params?: { mb_site_id?: number; mb_secret?: string; quality_analysis?: boolean }): Promise<ApiResponse<any>> {
         const response = await apiClient.post(`/waves/${waveId}/migrations/${mbUuid}/restart`, params || {});
         return response.data;
       },
 
-      async restartAllWaveMigrations(waveId: string, mbUuids?: string[]): Promise<ApiResponse<any>> {
+      async restartAllWaveMigrations(waveId: string, mbUuids?: string[], params?: { quality_analysis?: boolean }): Promise<ApiResponse<any>> {
         const response = await apiClient.post(`/waves/${waveId}/restart-all`, {
-          mb_uuids: mbUuids || []
+          mb_uuids: mbUuids || [],
+          quality_analysis: params?.quality_analysis ?? false
         });
         return response.data;
       },
@@ -361,7 +362,7 @@ export const api = {
           project_settings?: Record<string, { allowed_tabs: string[]; is_active: boolean }>;
         }
       ): Promise<ApiResponse<{ id: number; token: string; review_url: string }>> {
-        const response = await apiClient.post(`/waves/${waveId}/review-token`, data);
+        const response = await apiClient.post(`/waves/${waveId}/review-token`, data, { timeout: 120000 });
         return response.data;
       },
 
@@ -459,6 +460,17 @@ export const api = {
       },
 
       getScreenshotUrl(filename: string): string {
+        return `${API_BASE_URL}/screenshots/${filename}`;
+      },
+
+      /**
+       * Returns img src for a screenshot. If path is already an API URL (/api/screenshots/...), use as-is.
+       * Otherwise treat as filename or file path and return /api/screenshots/{filename}.
+       */
+      getScreenshotSrc(path: string | null | undefined): string {
+        if (!path) return '';
+        if (path.startsWith('/api/screenshots/')) return path;
+        const filename = path.replace(/\\/g, '/').split('/').pop() || path;
         return `${API_BASE_URL}/screenshots/${filename}`;
       },
 
@@ -621,6 +633,10 @@ export const api = {
       completed_at?: string;
       migration_uuid?: string;
       migration_id?: string | number;
+      reviewer?: {
+        person_brizy?: string | null;
+        uuid?: string | null;
+      } | null;
       result_data?: {
         migration_id?: string | number;
         date?: string;
@@ -646,6 +662,10 @@ export const api = {
       brizy_project_domain?: string | null;
       changes_json?: any;
       cloning_enabled?: boolean;
+      reviewer?: {
+        person_brizy?: string | null;
+        uuid?: string | null;
+      } | null;
       created_at: string;
       updated_at: string;
     }

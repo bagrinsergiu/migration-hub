@@ -900,8 +900,8 @@ export default function MigrationDetails() {
               {/* Блок уведомлений и информации о процессе - сразу под заголовком */}
               {!loadingProcessInfo && processInfo && (
                 <>
-                  {/* Уведомление о статусе lock-файла - показываем только если нет process.message или оно не содержит эту информацию */}
-                  {!processInfo.lock_file_exists && !processInfo.process?.running && 
+                  {/* Уведомление о статусе lock-файла — не показываем при опросе API сервера */}
+                  {processInfo.source !== 'migration_server_api' && !processInfo.lock_file_exists && !processInfo.process?.running && 
                    (!processInfo.process?.message || !processInfo.process.message.includes('Lock-файл не найден')) && (
                     <div className="alert alert-info" style={{ marginBottom: '1rem', padding: '0.75rem', fontSize: '0.875rem', borderRadius: '4px', backgroundColor: '#d1ecf1', border: '1px solid #bee5eb', color: '#0c5460' }}>
                       ℹ️ Lock-файл не найден, процесс не запущен
@@ -912,7 +912,8 @@ export default function MigrationDetails() {
                   {processInfo.process?.running && processInfo.process?.detected_by && 
                    (!processInfo.process?.message || !processInfo.process.message.includes('найден') && !processInfo.process.message.includes('определен')) && (
                     <div className="alert alert-info" style={{ marginBottom: '1rem', padding: '0.75rem', fontSize: '0.875rem', borderRadius: '4px', backgroundColor: '#d1ecf1', border: '1px solid #bee5eb', color: '#0c5460' }}>
-                      ℹ️ {processInfo.process.detected_by === 'lock_file_pid' ? 'Процесс найден по PID из lock-файла' :
+                      ℹ️ {processInfo.process.detected_by === 'migration_server_api' ? 'Статус с API сервера миграции' :
+                          processInfo.process.detected_by === 'lock_file_pid' ? 'Процесс найден по PID из lock-файла' :
                           processInfo.process.detected_by === 'lock_file_timestamp_and_db_status' ? 'Процесс определен по времени файла и статусу БД' :
                           processInfo.process.detected_by === 'db_status' ? 'Процесс определен по статусу БД' :
                           processInfo.process.detected_by === 'lsof' ? 'Процесс найден через lsof' :
@@ -925,7 +926,9 @@ export default function MigrationDetails() {
                   {/* Уведомление о статусе миграции */}
                   {processInfo.status_updated && (
                     <div className="alert alert-info" style={{ marginBottom: '1rem', padding: '0.75rem', fontSize: '0.875rem', borderRadius: '4px', backgroundColor: '#d1ecf1', border: '1px solid #bee5eb', color: '#0c5460' }}>
-                      ✅ Статус миграции был автоматически обновлен, так как процесс не найден. Страница будет обновлена...
+                      ✅ {processInfo.source === 'migration_server_api'
+                        ? 'Статус синхронизирован с сервером миграции. Страница будет обновлена.'
+                        : 'Статус миграции был автоматически обновлен, так как процесс не найден. Страница будет обновлена...'}
                     </div>
                   )}
                   
@@ -965,13 +968,19 @@ export default function MigrationDetails() {
                 ) : processInfo ? (
                   <div className="process-info" style={{ marginBottom: '1rem' }}>
                     <div className="info-grid">
+                      {processInfo.source === 'migration_server_api' && (
+                        <div className="info-item">
+                          <span className="info-label">Источник:</span>
+                          <span className="info-value" style={{ color: '#0d6efd' }}>API сервера миграции</span>
+                        </div>
+                      )}
                       <div className="info-item">
                         <span className="info-label">Lock-файл:</span>
                         <span className="info-value">
                           {processInfo.lock_file_exists ? (
                             <span style={{ color: '#dc3545' }}>● Существует</span>
                           ) : (
-                            <span style={{ color: '#198754' }}>● Не найден</span>
+                            <span style={{ color: '#198754' }}>● Не используется</span>
                           )}
                         </span>
                       </div>
@@ -2379,7 +2388,7 @@ function ArchivedPageAnalysisDetails({ migrationId, pageSlug, onClose }: { migra
                   <div className="screenshot-item">
                     <h4>Исходная страница</h4>
                     <img
-                      src={api.getScreenshotUrl(sourceFilename)}
+                      src={api.getScreenshotSrc(sourceScreenshot)}
                       alt="Source screenshot"
                       className="screenshot-image"
                       onError={(e) => {
@@ -2393,7 +2402,7 @@ function ArchivedPageAnalysisDetails({ migrationId, pageSlug, onClose }: { migra
                   <div className="screenshot-item">
                     <h4>Мигрированная страница</h4>
                     <img
-                      src={api.getScreenshotUrl(migratedFilename)}
+                      src={api.getScreenshotSrc(migratedScreenshot)}
                       alt="Migrated screenshot"
                       className="screenshot-image"
                       onError={(e) => {
