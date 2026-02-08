@@ -296,6 +296,100 @@
   color: #f7fafc;
 }
 
+/* Basic Information card — блоки с заголовками */
+.basic-info-card {
+  background: #fff;
+  border-radius: 12px;
+  padding: 1.5rem;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
+  border: 1px solid #e2e8f0;
+}
+
+[data-theme="dark"] .basic-info-card {
+  background: #2d3748;
+  border-color: #4a5568;
+}
+
+.basic-info-card h3 {
+  margin: 0 0 1.25rem 0;
+  padding-bottom: 0.75rem;
+  border-bottom: 1px solid #e2e8f0;
+}
+
+[data-theme="dark"] .basic-info-card h3 {
+  border-bottom-color: #4a5568;
+}
+
+.basic-info-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 1.5rem;
+}
+
+.basic-info-block {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.basic-info-block-title {
+  margin: 0;
+  font-size: 0.75rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: #718096;
+}
+
+[data-theme="dark"] .basic-info-block-title {
+  color: #a0aec0;
+}
+
+.basic-info-rows {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.basic-info-row {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+}
+
+.basic-info-label {
+  font-size: 0.8125rem;
+  font-weight: 500;
+  color: #4a5568;
+}
+
+[data-theme="dark"] .basic-info-label {
+  color: #a0aec0;
+}
+
+.basic-info-value {
+  font-size: 0.875rem;
+  color: #1a202c;
+  word-break: break-all;
+}
+
+[data-theme="dark"] .basic-info-value {
+  color: #e2e8f0;
+}
+
+.basic-info-link {
+  color: #3182ce;
+  text-decoration: none;
+}
+
+.basic-info-link:hover {
+  text-decoration: underline;
+}
+
+[data-theme="dark"] .basic-info-link {
+  color: #63b3ed;
+}
+
 .info-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));

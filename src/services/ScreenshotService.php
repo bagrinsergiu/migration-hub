@@ -206,20 +206,28 @@ class ScreenshotService
             return $filePath;
         }
         
+        // Пробуем то же имя с другим расширением (например .png вместо .jpg) в папке mbUuid
+        $baseWithoutExt = pathinfo($filename, PATHINFO_FILENAME);
+        $uuidDir = $this->screenshotsDir . $mbUuid . '/';
+        if (is_dir($uuidDir)) {
+            $altMatches = glob($uuidDir . $baseWithoutExt . '.*');
+            if (!empty($altMatches) && file_exists($altMatches[0]) && is_file($altMatches[0])) {
+                return $altMatches[0];
+            }
+        }
+        
         // Если не нашли по стандартному пути, ищем файл во всех поддиректориях
         // Это нужно на случай, если файл был сохранен в другой директории
         if (is_dir($this->screenshotsDir)) {
-            $iterator = new \RecursiveIteratorIterator(
-                new \RecursiveDirectoryIterator($this->screenshotsDir, \RecursiveDirectoryIterator::SKIP_DOTS),
-                \RecursiveIteratorIterator::SELF_FIRST
-            );
-            
-            foreach ($iterator as $file) {
-                if ($file->isFile() && $file->getFilename() === $filename) {
-                    $foundPath = $file->getRealPath();
-                    if ($foundPath && file_exists($foundPath)) {
-                        return $foundPath;
-                    }
+            $uuidDirs = glob($this->screenshotsDir . '*', GLOB_ONLYDIR) ?: [];
+            foreach ($uuidDirs as $dir) {
+                $potentialPath = $dir . '/' . $filename;
+                if (file_exists($potentialPath) && is_file($potentialPath)) {
+                    return $potentialPath;
+                }
+                $altMatches = glob($dir . '/' . $baseWithoutExt . '.*');
+                if (!empty($altMatches) && file_exists($altMatches[0]) && is_file($altMatches[0])) {
+                    return $altMatches[0];
                 }
             }
         }

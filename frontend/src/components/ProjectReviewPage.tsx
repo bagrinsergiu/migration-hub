@@ -32,12 +32,21 @@ export default function ProjectReviewPage() {
   const [reviewStatus, setReviewStatus] = useState<string>('approved');
   const [reviewComment, setReviewComment] = useState<string>('');
   const [savingReview, setSavingReview] = useState(false);
+  const [startingReview, setStartingReview] = useState(false);
   const [projectReview, setProjectReview] = useState<any>(null);
 
   // Используем useRef для отслеживания, был ли уже сделан запрос
   const loadingRef = useRef<string | null>(null);
   const loadedRef = useRef<string | null>(null);
   const abortControllerRef = useRef<AbortController | null>(null);
+  const reviewJustSavedRef = useRef(false);
+
+  // Единый формат ссылки на скриншот: /api/screenshots/{filename} (как на /migrations/:id)
+  const getScreenshotSrc = useCallback((path: string | null | undefined): string => {
+    if (!path) return '';
+    const filename = path.replace(/\\/g, '/').split('/').pop() || path;
+    return `/api/screenshots/${filename}`;
+  }, []);
 
   useEffect(() => {
     if (!token || !brzProjectId) {
@@ -210,6 +219,7 @@ export default function ProjectReviewPage() {
       const data = await response.json();
       
       if (data.success) {
+        reviewJustSavedRef.current = true;
         // Обновляем локальное состояние
         setProjectReview({
           review_status: reviewStatus,
@@ -226,6 +236,28 @@ export default function ProjectReviewPage() {
       alert('Ошибка при сохранении ревью: ' + (err.message || 'Неизвестная ошибка'));
     } finally {
       setSavingReview(false);
+    }
+  };
+
+  const handleStartReview = async () => {
+    if (!token || !brzProjectId) return;
+    try {
+      setStartingReview(true);
+      const response = await fetch(`/api/review/wave/${token}/migration/${brzProjectId}/start-review`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+      });
+      const data = await response.json();
+      if (data.success) {
+        alert(t('startReview') || 'Статус "in progress" установлен в Google таблице');
+      } else {
+        alert('Ошибка: ' + (data.error || 'Неизвестная ошибка'));
+      }
+    } catch (err: any) {
+      console.error('[ProjectReviewPage] Error starting review:', err);
+      alert('Ошибка: ' + (err.message || 'Неизвестная ошибка'));
+    } finally {
+      setStartingReview(false);
     }
   };
 
@@ -491,7 +523,11 @@ export default function ProjectReviewPage() {
           <p className="error-message">❌ {error || t('dataNotFound')}</p>
           <button
             className="btn btn-secondary"
-            onClick={() => navigate(`/review/${token}`)}
+            onClick={() => {
+              const state = reviewJustSavedRef.current ? { refreshList: true } : undefined;
+              reviewJustSavedRef.current = false;
+              navigate(`/review/${token}`, { state });
+            }}
           >
             {t('backToProjects')}
           </button>
@@ -512,7 +548,11 @@ export default function ProjectReviewPage() {
         <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
           <button
             className="btn btn-secondary"
-            onClick={() => navigate(`/review/${token}`)}
+            onClick={() => {
+              const state = reviewJustSavedRef.current ? { refreshList: true } : undefined;
+              reviewJustSavedRef.current = false;
+              navigate(`/review/${token}`, { state });
+            }}
           >
             {t('backToProjects')}
           </button>
@@ -521,13 +561,22 @@ export default function ProjectReviewPage() {
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: '1rem', flex: 1, justifyContent: 'space-between' }}>
           <h1>{projectName}</h1>
-          <button
-            className="btn btn-primary"
-            onClick={() => setShowReviewModal(true)}
-            style={{ marginLeft: 'auto' }}
-          >
-            {projectReview ? '✏️ ' : '✅ '}{t('completeReview') || 'Завершить ревью'}
-          </button>
+          <div style={{ display: 'flex', gap: '0.5rem', marginLeft: 'auto' }}>
+            <button
+              className="btn btn-secondary"
+              onClick={handleStartReview}
+              disabled={startingReview}
+            >
+              {startingReview ? '...' : '▶️ '}{t('startReview') || 'Начать ревью'}
+            </button>
+            <button
+              className="btn btn-primary"
+              onClick={() => setShowReviewModal(true)}
+              disabled={savingReview}
+            >
+              {projectReview ? '✏️ ' : '✅ '}{t('completeReview') || 'Завершить ревью'}
+            </button>
+          </div>
         </div>
       </div>
 
@@ -549,67 +598,100 @@ export default function ProjectReviewPage() {
       <div className="review-page-content">
         {activeTab === 'overview' && (
           <div className="tab-content">
-            <div className="overview-section">
+            <div className="overview-section basic-info-card">
               <h3>{t('basicInfo')}</h3>
-              <div className="info-grid">
-                <div className="info-item">
-                  <span className="info-label">{t('mbUuid')}</span>
-                  <span className="info-value uuid-cell">{formatUUID(details.mb_project_uuid)}</span>
+
+              <div className="basic-info-grid">
+                <div className="basic-info-block basic-info-identifiers">
+                  <h4 className="basic-info-block-title">{t('basicInfoIdentifiers')}</h4>
+                  <div className="basic-info-rows">
+                    <div className="basic-info-row">
+                      <span className="basic-info-label">{t('mbUuid')}</span>
+                      <span className="basic-info-value uuid-cell">{formatUUID(details.mb_project_uuid)}</span>
+                    </div>
+                    {details.brz_project_id && (
+                      <div className="basic-info-row">
+                        <span className="basic-info-label">{t('brizyProjectId')}</span>
+                        <span className="basic-info-value">{details.brz_project_id}</span>
+                      </div>
+                    )}
+                    <div className="basic-info-row">
+                      <span className="basic-info-label">{t('status')}</span>
+                      <span className="basic-info-value">
+                        <span
+                          className="status-badge"
+                          style={{
+                            color: statusConfig.color,
+                            backgroundColor: statusConfig.bgColor,
+                          }}
+                        >
+                          {statusConfig.label}
+                        </span>
+                      </span>
+                    </div>
+                  </div>
                 </div>
-                {details.brz_project_id && (
-                  <div className="info-item">
-                    <span className="info-label">{t('brizyProjectId')}</span>
-                    <span className="info-value">{details.brz_project_id}</span>
+
+                <div className="basic-info-block basic-info-urls">
+                  <h4 className="basic-info-block-title">URLs</h4>
+                  <div className="basic-info-rows">
+                    {details.mb_project_domain && (
+                      <div className="basic-info-row">
+                        <span className="basic-info-label">{t('sourceProject')}</span>
+                        <span className="basic-info-value">
+                          <a
+                            href={/^https?:\/\//i.test(details.mb_project_domain) ? details.mb_project_domain : `https://${details.mb_project_domain}`}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="basic-info-link"
+                          >
+                            {details.mb_project_domain}
+                          </a>
+                        </span>
+                      </div>
+                    )}
+                    {details.brizy_project_domain && (
+                      <div className="basic-info-row">
+                        <span className="basic-info-label">{t('clonedSite')}</span>
+                        <span className="basic-info-value">
+                          <a
+                            href={details.brizy_project_domain}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="basic-info-link"
+                          >
+                            {details.brizy_project_domain}
+                          </a>
+                        </span>
+                      </div>
+                    )}
                   </div>
-                )}
-                {details.brizy_project_domain && (
-                  <div className="info-item">
-                    <span className="info-label">{t('domain')}</span>
-                    <span className="info-value">
-                      <a
-                        href={details.brizy_project_domain}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="link"
-                      >
-                        {details.brizy_project_domain}
-                      </a>
-                    </span>
-                  </div>
-                )}
-                <div className="info-item">
-                  <span className="info-label">{t('status')}:</span>
-                  <span className="info-value">
-                    <span
-                      className="status-badge"
-                      style={{
-                        color: statusConfig.color,
-                        backgroundColor: statusConfig.bgColor,
-                      }}
-                    >
-                      {statusConfig.label}
-                    </span>
-                  </span>
                 </div>
-                <div className="info-item">
-                  <span className="info-label">{t('created')}:</span>
-                  <span className="info-value">{formatDate(details.created_at)}</span>
+
+                <div className="basic-info-block basic-info-dates">
+                  <h4 className="basic-info-block-title">{t('basicInfoDates')}</h4>
+                  <div className="basic-info-rows">
+                    <div className="basic-info-row">
+                      <span className="basic-info-label">{t('created')}</span>
+                      <span className="basic-info-value">{formatDate(details.created_at)}</span>
+                    </div>
+                    {details.completed_at && (
+                      <div className="basic-info-row">
+                        <span className="basic-info-label">{t('completed')}</span>
+                        <span className="basic-info-value">{formatDate(details.completed_at)}</span>
+                      </div>
+                    )}
+                    {progress && (
+                      <div className="basic-info-row">
+                        <span className="basic-info-label">{t('progress')}</span>
+                        <span className="basic-info-value">
+                          {progress.Success || 0} / {progress.Total || 0}
+                          {progress.processTime != null && ` (${Number(progress.processTime).toFixed(1)}s)`}
+                        </span>
+                      </div>
+                    )}
+                  </div>
                 </div>
-                {details.completed_at && (
-                  <div className="info-item">
-                    <span className="info-label">{t('completed')}:</span>
-                    <span className="info-value">{formatDate(details.completed_at)}</span>
-                  </div>
-                )}
-                {progress && (
-                  <div className="info-item">
-                    <span className="info-label">{t('progress')}:</span>
-                    <span className="info-value">
-                      {progress.Success || 0} / {progress.Total || 0}
-                      {progress.processTime && ` (${progress.processTime.toFixed(1)}s)`}
-                    </span>
-                  </div>
-                )}
               </div>
             </div>
 
@@ -738,10 +820,7 @@ export default function ProjectReviewPage() {
                 <div className="screenshots-grid">
                   {screenshots.map((screenshot, index) => {
                     const screenshotFilename = screenshot.split('/').pop() || screenshot;
-                    const screenshotUrl = screenshot.startsWith('http') 
-                      ? screenshot 
-                      : `/api/review/wave/${token}/screenshots/${screenshotFilename}`;
-                    
+                    const screenshotUrl = screenshot.startsWith('http') ? screenshot : getScreenshotSrc(screenshot);
                     return (
                       <div key={index} className="screenshot-item">
                         <img
@@ -985,11 +1064,11 @@ export default function ProjectReviewPage() {
                                   {(report.screenshots_path?.source || report.screenshots_path?.migrated) && (
                                     <div style={{ display: 'flex', gap: '0.5rem', marginBottom: '0.75rem', minHeight: '150px' }}>
                                       {report.screenshots_path?.source && (() => {
-                                        const sourceFilename = report.screenshots_path.source.split('/').pop();
-                                        return sourceFilename ? (
+                                        const srcUrl = getScreenshotSrc(report.screenshots_path.source);
+                                        return srcUrl ? (
                                           <div style={{ flex: 1, border: '1px solid #e0e0e0', borderRadius: '4px', overflow: 'hidden', backgroundColor: '#f9fafb', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
                                             <img 
-                                              src={`/api/review/wave/${token}/screenshots/${sourceFilename}`}
+                                              src={srcUrl}
                                               alt="Исходная страница"
                                               style={{ width: '100%', height: '100%', objectFit: 'contain', display: 'block', maxHeight: '150px' }}
                                               onError={(e) => {
@@ -1000,11 +1079,11 @@ export default function ProjectReviewPage() {
                                         ) : null;
                                       })()}
                                       {report.screenshots_path?.migrated && (() => {
-                                        const migratedFilename = report.screenshots_path.migrated.split('/').pop();
-                                        return migratedFilename ? (
+                                        const srcUrl = getScreenshotSrc(report.screenshots_path.migrated);
+                                        return srcUrl ? (
                                           <div style={{ flex: 1, border: '1px solid #e0e0e0', borderRadius: '4px', overflow: 'hidden', backgroundColor: '#f9fafb', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
                                             <img 
-                                              src={`/api/review/wave/${token}/screenshots/${migratedFilename}`}
+                                              src={srcUrl}
                                               alt="Мигрированная страница"
                                               style={{ width: '100%', height: '100%', objectFit: 'contain', display: 'block', maxHeight: '150px' }}
                                               onError={(e) => {
@@ -1269,35 +1348,11 @@ function PageAnalysisDetailsModal({
   const sourceScreenshot = report.screenshots_path?.source;
   const migratedScreenshot = report.screenshots_path?.migrated;
   
-  // Функция для получения URL скриншота
-  const getScreenshotUrl = (path: string | null | undefined, type?: 'source' | 'migrated'): string | null => {
+  // Единый формат: /api/screenshots/{filename}
+  const getScreenshotUrl = (path: string | null | undefined): string | null => {
     if (!path) return null;
-    
-    // Если это уже URL (начинается с /api/), используем его напрямую
-    if (path.startsWith('/api/')) {
-      return path;
-    }
-    
-    // Если это полный путь к файлу, извлекаем имя файла
     const filename = getFilename(path);
-    if (!filename) return null;
-    
-    // Если есть mbUuid, используем новый эндпоинт для получения скриншота из хранилища дашборда
-    if (mbUuid) {
-      return `/api/screenshots/${mbUuid}/${filename}`;
-    }
-    
-    // Если mbUuid нет, но есть type и token, используем endpoint с токеном
-    if (type && token) {
-      return `/api/review/wave/${token}/migration/${brzProjectId}/analysis/${encodeURIComponent(pageSlug)}/screenshots/${type}`;
-    }
-    
-    // Fallback: используем старый endpoint с токеном
-    if (token) {
-      return `/api/review/wave/${token}/screenshots/${filename}`;
-    }
-    
-    return null;
+    return filename ? `/api/screenshots/${filename}` : null;
   };
   
   // Более надежное извлечение имени файла (обрабатывает и / и \)
@@ -1316,8 +1371,8 @@ function PageAnalysisDetailsModal({
     return filename ? filename.trim() : null;
   };
   
-  const sourceUrl = getScreenshotUrl(sourceScreenshot, 'source');
-  const migratedUrl = getScreenshotUrl(migratedScreenshot, 'migrated');
+  const sourceUrl = getScreenshotUrl(sourceScreenshot);
+  const migratedUrl = getScreenshotUrl(migratedScreenshot);
   const sourceFilename = getFilename(sourceScreenshot);
   const migratedFilename = getFilename(migratedScreenshot);
 
@@ -1468,14 +1523,8 @@ function PageAnalysisDetailsModal({
                         className="screenshot-image"
                         style={{ cursor: 'pointer' }}
                         onClick={() => setFullscreenImage(sourceUrl!)}
-                        onError={async (e) => {
-                          // Если новый эндпоинт не сработал, пробуем старый способ
-                          if (sourceFilename && !sourceUrl!.includes('/screenshots/')) {
-                            const fallbackUrl = `/api/review/wave/${token}/screenshots/${sourceFilename}`;
-                            (e.target as HTMLImageElement).src = fallbackUrl;
-                          } else {
-                            (e.target as HTMLImageElement).src = `data:image/svg+xml,%3Csvg xmlns="http://www.w3.org/2000/svg" width="400" height="300"%3E%3Ctext x="50%25" y="50%25" text-anchor="middle" dy=".3em"%3E${encodeURIComponent(t('screenshotNotFound'))}%3C/text%3E%3C/svg%3E`;
-                          }
+                        onError={(e) => {
+                          (e.target as HTMLImageElement).src = `data:image/svg+xml,%3Csvg xmlns="http://www.w3.org/2000/svg" width="400" height="300"%3E%3Ctext x="50%25" y="50%25" text-anchor="middle" dy=".3em"%3E${encodeURIComponent(t('screenshotNotFound'))}%3C/text%3E%3C/svg%3E`;
                         }}
                       />
                     ) : (
@@ -1496,14 +1545,8 @@ function PageAnalysisDetailsModal({
                         className="screenshot-image"
                         style={{ cursor: 'pointer' }}
                         onClick={() => setFullscreenImage(migratedUrl!)}
-                        onError={async (e) => {
-                          // Если новый эндпоинт не сработал, пробуем старый способ
-                          if (migratedFilename && !migratedUrl!.includes('/screenshots/')) {
-                            const fallbackUrl = `/api/review/wave/${token}/screenshots/${migratedFilename}`;
-                            (e.target as HTMLImageElement).src = fallbackUrl;
-                          } else {
-                            (e.target as HTMLImageElement).src = `data:image/svg+xml,%3Csvg xmlns="http://www.w3.org/2000/svg" width="400" height="300"%3E%3Ctext x="50%25" y="50%25" text-anchor="middle" dy=".3em"%3E${encodeURIComponent(t('screenshotNotFound'))}%3C/text%3E%3C/svg%3E`;
-                          }
+                        onError={(e) => {
+                          (e.target as HTMLImageElement).src = `data:image/svg+xml,%3Csvg xmlns="http://www.w3.org/2000/svg" width="400" height="300"%3E%3Ctext x="50%25" y="50%25" text-anchor="middle" dy=".3em"%3E${encodeURIComponent(t('screenshotNotFound'))}%3C/text%3E%3C/svg%3E`;
                         }}
                       />
                     ) : (

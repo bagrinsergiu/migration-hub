@@ -29,6 +29,10 @@ export interface Translations {
   mbUuid: string;
   brizyProjectId: string;
   domain: string;
+  sourceProject: string;
+  clonedSite: string;
+  basicInfoIdentifiers: string;
+  basicInfoDates: string;
   errors: string;
   warnings: string;
   moreWarnings: string;
@@ -102,6 +106,7 @@ export interface Translations {
   errorLoadingAnalysis: string;
   
   // Project review
+  startReview: string;
   completeReview: string;
   reviewStatus: string;
   approved: string;
@@ -142,6 +147,10 @@ const translations: Record<Language, Translations> = {
     mbUuid: 'MB UUID:',
     brizyProjectId: 'Brizy Project ID:',
     domain: 'Domain:',
+    sourceProject: 'Source project:',
+    clonedSite: 'Cloned site:',
+    basicInfoIdentifiers: 'Identifiers',
+    basicInfoDates: 'Dates & progress',
     errors: 'Errors',
     warnings: 'Warnings',
     moreWarnings: '... and {count} more warnings',
@@ -203,6 +212,7 @@ const translations: Record<Language, Translations> = {
     errorLoadingScreenshots: 'Error loading screenshots',
     analysisNotFound: 'Analysis not found',
     errorLoadingAnalysis: 'Error loading analysis',
+    startReview: 'Start Review',
     completeReview: 'Complete Review',
     reviewStatus: 'Review Status',
     approved: 'Approved',
@@ -241,6 +251,10 @@ const translations: Record<Language, Translations> = {
     mbUuid: 'MB UUID:',
     brizyProjectId: 'ID Proiect Brizy:',
     domain: 'Domeniu:',
+    sourceProject: 'Proiect sursă:',
+    clonedSite: 'Site clonat:',
+    basicInfoIdentifiers: 'Identificatori',
+    basicInfoDates: 'Date și progres',
     errors: 'Erori',
     warnings: 'Avertismente',
     moreWarnings: '... și încă {count} avertismente',
@@ -302,6 +316,7 @@ const translations: Record<Language, Translations> = {
     errorLoadingScreenshots: 'Eroare la încărcarea capturilor de ecran',
     analysisNotFound: 'Analiză negăsită',
     errorLoadingAnalysis: 'Eroare la încărcarea analizei',
+    startReview: 'Începe Revizuirea',
     completeReview: 'Finalizează Revizuirea',
     reviewStatus: 'Status Revizuire',
     approved: 'Aprobat',
@@ -340,6 +355,10 @@ const translations: Record<Language, Translations> = {
     mbUuid: 'MB UUID:',
     brizyProjectId: 'Brizy Project ID:',
     domain: 'Домен:',
+    sourceProject: 'Исходный проект:',
+    clonedSite: 'Клонированный сайт:',
+    basicInfoIdentifiers: 'Идентификаторы',
+    basicInfoDates: 'Даты и прогресс',
     errors: 'Ошибки',
     warnings: 'Предупреждения',
     moreWarnings: '... и еще {count} предупреждений',
@@ -401,6 +420,7 @@ const translations: Record<Language, Translations> = {
     errorLoadingScreenshots: 'Ошибка загрузки скриншотов',
     analysisNotFound: 'Анализ не найден',
     errorLoadingAnalysis: 'Ошибка загрузки анализа',
+    startReview: 'Начать ревью',
     completeReview: 'Завершить ревью',
     reviewStatus: 'Статус ревью',
     approved: 'Одобрено',

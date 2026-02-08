@@ -507,12 +507,11 @@ export const api = {
       },
 
       /**
-       * Returns img src for a screenshot. If path is already an API URL (/api/screenshots/...), use as-is.
-       * Otherwise treat as filename or file path and return /api/screenshots/{filename}.
+       * Единый формат ссылки на скриншот: /api/screenshots/{filename}.
+       * Из любого пути (полный URL, путь с uuid, путь к файлу) извлекается только имя файла.
        */
       getScreenshotSrc(path: string | null | undefined): string {
         if (!path) return '';
-        if (path.startsWith('/api/screenshots/')) return path;
         const filename = path.replace(/\\/g, '/').split('/').pop() || path;
         return `${API_BASE_URL}/screenshots/${filename}`;
       },

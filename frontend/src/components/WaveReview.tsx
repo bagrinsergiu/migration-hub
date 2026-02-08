@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo, useRef } from 'react';
-import { useParams, useNavigate } from 'react-router-dom';
+import { useParams, useNavigate, useLocation } from 'react-router-dom';
 import { WaveDetails as WaveDetailsType } from '../api/client';
 import { getStatusConfig } from '../utils/status';
 import { formatDate, formatUUID } from '../utils/format';
@@ -13,22 +13,42 @@ export default function WaveReview() {
   const { t } = useTranslation();
   const { token } = useParams<{ token: string }>();
   const navigate = useNavigate();
+  const location = useLocation();
   const [details, setDetails] = useState<WaveDetailsType | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [searchTerm, setSearchTerm] = useState('');
   const [statusFilter, setStatusFilter] = useState<string>('all');
-  
+  const [refreshTrigger, setRefreshTrigger] = useState(0);
+
   // Используем useRef для отслеживания, был ли уже сделан запрос для этого токена
   const loadingRef = useRef<string | null>(null);
   const loadedRef = useRef<string | null>(null);
   const abortControllerRef = useRef<AbortController | null>(null);
+
+  // При возврате на вкладку — обновляем список (прогресс и "Review ready")
+  useEffect(() => {
+    const onVisibilityChange = () => {
+      if (document.visibilityState === 'visible' && token && details) {
+        loadedRef.current = null;
+        setRefreshTrigger((prev) => prev + 1);
+      }
+    };
+    document.addEventListener('visibilitychange', onVisibilityChange);
+    return () => document.removeEventListener('visibilitychange', onVisibilityChange);
+  }, [token, details]);
 
   useEffect(() => {
     if (!token) {
       setError(t('tokenOrUuidNotSpecified'));
       setLoading(false);
       return;
+    }
+
+    // Запросить обновление списка после сохранения ревью (переход "Назад к проектам")
+    if ((location.state as { refreshList?: boolean })?.refreshList) {
+      navigate(location.pathname, { replace: true, state: {} });
+      loadedRef.current = null;
     }
 
     // Если уже загружены данные для этого токена, не делаем повторный запрос
@@ -146,7 +166,7 @@ export default function WaveReview() {
       loadingRef.current = null;
       abortControllerRef.current = null;
     };
-  }, [token]); // Только token - details не должен быть в зависимостях, иначе будет бесконечный цикл
+  }, [token, refreshTrigger]); // refreshTrigger — при возврате на вкладку или после сохранения ревью
 
   // Фильтрация проектов - ВСЕГДА вызывается, даже если details еще нет
   const filteredMigrations = useMemo(() => {

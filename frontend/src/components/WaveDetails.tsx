@@ -743,53 +743,13 @@ export default function WaveDetails() {
                         <td>
                           <div className="action-buttons">
                             {migration.brz_project_id && (
-                              <>
-                                <button
-                                  onClick={() => handleRestartMigration(migration.mb_project_uuid, false)}
-                                  className="btn btn-sm btn-primary"
-                                  disabled={restarting === migration.mb_project_uuid}
-                                  title="Перезапустить миграцию без анализа AI"
-                                >
-                                  {restarting === migration.mb_project_uuid ? '...' : '↻'}
-                                </button>
-                                <button
-                                  onClick={() => handleRestartMigration(migration.mb_project_uuid, true)}
-                                  className="btn btn-sm btn-primary"
-                                  disabled={restarting === migration.mb_project_uuid}
-                                  title="Перезапустить миграцию с анализом AI"
-                                  style={{ marginLeft: '0.2rem' }}
-                                >
-                                  {restarting === migration.mb_project_uuid ? '...' : '↻ AI'}
-                                </button>
-                                <button
-                                  onClick={() => handleRemoveLock(migration.mb_project_uuid)}
-                                  className="btn btn-sm"
-                                  disabled={removingLock === migration.mb_project_uuid}
-                                  title="Удалить lock-файл (разблокировать миграцию)"
-                                  style={{ 
-                                    backgroundColor: '#f59e0b', 
-                                    color: '#fff', 
-                                    borderColor: '#f59e0b',
-                                    marginLeft: '0.25rem'
-                                  }}
-                                >
-                                  {removingLock === migration.mb_project_uuid ? '...' : '🔓'}
-                                </button>
-                                <button
-                                  onClick={() => handleShowLogs(migration.mb_project_uuid)}
-                                  className="btn btn-sm btn-secondary"
-                                  title="Показать логи"
-                                >
-                                  📋
-                                </button>
-                                <Link
-                                  to={`/migrations/${migration.brz_project_id}`}
-                                  className="btn btn-sm btn-link"
-                                  title="Детали миграции"
-                                >
-                                  👁
-                                </Link>
-                              </>
+                              <Link
+                                to={`/migrations/${migration.brz_project_id}`}
+                                className="btn btn-sm btn-link"
+                                title="Детали миграции"
+                              >
+                                👁 Детали миграции
+                              </Link>
                             )}
                           </div>
                         </td>

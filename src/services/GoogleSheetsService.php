@@ -827,6 +827,187 @@ class GoogleSheetsService
     }
 
     /**
+     * Обновить колонки Manual review в Google Sheets для миграции.
+     * Записывает статус и комментарий в колонки "Manual review Status" и "Manual review comment".
+     * При статусе "Done" окрашивает ячейку статуса в светло-зелёный цвет.
+     *
+     * @param string $mbProjectUuid UUID проекта (mb_project_uuid)
+     * @param string $status Статус: "Done" или "in progress"
+     * @param string|null $comment Комментарий для колонки "Manual review comment"
+     */
+    public function updateManualReviewForMigration(string $mbProjectUuid, string $status, ?string $comment = null): void
+    {
+        $mbProjectUuid = trim($mbProjectUuid);
+        if ($mbProjectUuid === '') {
+            return;
+        }
+
+        try {
+            $migration = $this->dbService->getMigrationByUuid($mbProjectUuid);
+            if (!$migration || empty($migration['wave_id'])) {
+                error_log("[GoogleSheetsService::updateManualReviewForMigration] Миграция не найдена или без wave_id: {$mbProjectUuid}");
+                return;
+            }
+
+            $sheets = $this->getSheetsByWave($migration['wave_id']);
+            if (empty($sheets)) {
+                error_log("[GoogleSheetsService::updateManualReviewForMigration] Нет листов для волны: " . $migration['wave_id']);
+                return;
+            }
+
+            if (!$this->isAuthenticated()) {
+                error_log("[GoogleSheetsService::updateManualReviewForMigration] Google Sheets не авторизован.");
+                return;
+            }
+
+            $uuidNormalizedNames = ['uuid', 'mb uuid', 'mb-uuid', 'mb_uuid'];
+            $statusNormalizedNames = ['manual review status', 'manual review-status', 'manual_review_status'];
+            $commentNormalizedNames = ['manual review comment', 'manual review-comment', 'manual_review_comment'];
+
+            foreach ($sheets as $sheet) {
+                $spreadsheetId = $sheet['spreadsheet_id'] ?? null;
+                $sheetName = $sheet['sheet_name'] ?? null;
+                $sheetId = isset($sheet['sheet_id']) && $sheet['sheet_id'] !== null && $sheet['sheet_id'] !== ''
+                    ? (int)$sheet['sheet_id']
+                    : null;
+                if (!$spreadsheetId || !$sheetName) {
+                    continue;
+                }
+                // Если sheet_id не в БД, получаем из API
+                if ($sheetId === null || $sheetId === 0) {
+                    try {
+                        $spreadsheet = $this->getSpreadsheet($spreadsheetId);
+                        foreach ($spreadsheet['sheets'] ?? [] as $s) {
+                            if (($s['name'] ?? $s['title'] ?? '') === $sheetName) {
+                                $sheetId = (int)($s['id'] ?? $s['sheet_id'] ?? 0);
+                                break;
+                            }
+                        }
+                    } catch (Exception $e) {
+                        error_log("[GoogleSheetsService::updateManualReviewForMigration] Не удалось получить sheetId: " . $e->getMessage());
+                    }
+                }
+
+                try {
+                    $data = $this->getSheetData($spreadsheetId, $sheetName);
+                    if (empty($data)) {
+                        continue;
+                    }
+
+                    $headers = array_map('trim', $data[0]);
+                    $uuidIndex = $this->findColumnIndexByHeaders($headers, $uuidNormalizedNames);
+                    $statusColIndex = $this->findColumnIndexByHeaders($headers, $statusNormalizedNames);
+                    $commentColIndex = $this->findColumnIndexByHeaders($headers, $commentNormalizedNames);
+
+                    if ($uuidIndex === null) {
+                        error_log("[GoogleSheetsService::updateManualReviewForMigration] Колонка UUID не найдена в листе: {$sheetName}");
+                        continue;
+                    }
+                    if ($statusColIndex === null) {
+                        error_log("[GoogleSheetsService::updateManualReviewForMigration] Колонка Manual review Status не найдена в листе: {$sheetName}");
+                        continue;
+                    }
+
+                    $dataRowIndex = null;
+                    for ($i = 1; $i < count($data); $i++) {
+                        $row = $data[$i];
+                        $cellUuid = isset($row[$uuidIndex]) ? trim((string)($row[$uuidIndex] ?? '')) : '';
+                        if ($cellUuid === $mbProjectUuid) {
+                            $dataRowIndex = $i;
+                            break;
+                        }
+                    }
+
+                    if ($dataRowIndex === null) {
+                        error_log("[GoogleSheetsService::updateManualReviewForMigration] Строка с UUID {$mbProjectUuid} не найдена в листе: {$sheetName}");
+                        continue;
+                    }
+
+                    $sheetRowNumber = $dataRowIndex + 1;
+
+                    // Обновляем Manual review Status
+                    $statusColLetter = $this->columnIndexToA1Letter($statusColIndex);
+                    $statusRangeA1 = $statusColLetter . $sheetRowNumber;
+                    $this->updateSheetCell($spreadsheetId, $sheetName, $statusRangeA1, $status);
+                    error_log("[GoogleSheetsService::updateManualReviewForMigration] Обновлена ячейка {$statusRangeA1} (Manual review Status) = '{$status}'");
+
+                    // Обновляем Manual review comment (если колонка есть)
+                    if ($commentColIndex !== null) {
+                        $commentColLetter = $this->columnIndexToA1Letter($commentColIndex);
+                        $commentRangeA1 = $commentColLetter . $sheetRowNumber;
+                        $this->updateSheetCell($spreadsheetId, $sheetName, $commentRangeA1, $comment ?? '');
+                    }
+
+                    // При статусе "Done" окрашиваем ячейку статуса в светло-зелёный
+                    if (strtolower($status) === 'done' && $sheetId !== null) {
+                        $this->applyCellBackgroundColor(
+                            $spreadsheetId,
+                            $sheetId,
+                            $statusColIndex,
+                            $statusColIndex + 1,
+                            $dataRowIndex,
+                            $dataRowIndex + 1,
+                            ['red' => 0.85, 'green' => 1.0, 'blue' => 0.85, 'alpha' => 1.0]
+                        );
+                    }
+                } catch (Exception $e) {
+                    error_log("[GoogleSheetsService::updateManualReviewForMigration] Ошибка для листа {$sheetName}: " . $e->getMessage());
+                }
+            }
+        } catch (Exception $e) {
+            error_log("[GoogleSheetsService::updateManualReviewForMigration] Ошибка: " . $e->getMessage());
+        }
+    }
+
+    /**
+     * Применить цвет фона к диапазону ячеек
+     *
+     * @param string $spreadsheetId
+     * @param int $sheetId
+     * @param int $startColumnIndex
+     * @param int $endColumnIndex
+     * @param int $startRowIndex
+     * @param int $endRowIndex
+     * @param array $color RGB с alpha: red, green, blue, alpha (0-1)
+     */
+    private function applyCellBackgroundColor(
+        string $spreadsheetId,
+        int $sheetId,
+        int $startColumnIndex,
+        int $endColumnIndex,
+        int $startRowIndex,
+        int $endRowIndex,
+        array $color
+    ): void {
+        try {
+            if (!$this->isAuthenticated()) {
+                return;
+            }
+            $this->service = new Google_Service_Sheets($this->client);
+            $repeatCell = new \Google_Service_Sheets_RepeatCellRequest([
+                'range' => [
+                    'sheetId' => $sheetId,
+                    'startRowIndex' => $startRowIndex,
+                    'endRowIndex' => $endRowIndex,
+                    'startColumnIndex' => $startColumnIndex,
+                    'endColumnIndex' => $endColumnIndex,
+                ],
+                'cell' => [
+                    'userEnteredFormat' => [
+                        'backgroundColor' => $color,
+                    ],
+                ],
+                'fields' => 'userEnteredFormat.backgroundColor',
+            ]);
+            $request = new \Google_Service_Sheets_Request(['repeatCell' => $repeatCell]);
+            $batchRequest = new \Google_Service_Sheets_BatchUpdateSpreadsheetRequest(['requests' => [$request]]);
+            $this->service->spreadsheets->batchUpdate($spreadsheetId, $batchRequest);
+        } catch (Exception $e) {
+            error_log("[GoogleSheetsService::applyCellBackgroundColor] Ошибка: " . $e->getMessage());
+        }
+    }
+
+    /**
      * Привязать лист к волне миграции
      * 
      * @param string $spreadsheetId ID Google таблицы
