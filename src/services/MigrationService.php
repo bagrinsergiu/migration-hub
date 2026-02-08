@@ -441,7 +441,7 @@ class MigrationService
             'status' => $status,
             'migration_uuid' => $result['migration_uuid'] ?? null,
             'brizy_project_domain' => $migrationValue['brizy_project_domain'] ?? $resultData['brizy_project_domain'] ?? $changesJson['brizy_project_domain'] ?? null,
-            'mb_project_domain' => $migrationValue['mb_project_domain'] ?? $resultData['mb_project_domain'] ?? $changesJson['mb_project_domain'] ?? null,
+            'mb_project_domain' => $migrationValue['mb_project_domain'] ?? $resultData['mb_project_domain'] ?? $changesJson['mb_project_domain'] ?? $mapping['mb_project_domain'] ?? null,
             'progress' => $migrationValue['progress'] ?? $resultData['progress'] ?? null,
             'warnings' => $migrationValue['message']['warning'] ?? $resultData['message']['warning'] ?? [],
             'reviewer' => $reviewer, // Информация о ревьюере

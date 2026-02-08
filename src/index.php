@@ -337,18 +337,36 @@ return function (array $context, Request $request) use ($debugMode): Response {
                     ], 403);
                 }
                 
-                // Ищем файл в var/tmp/project_*/ директориях
-                $currentFile = __FILE__;
-                $projectRoot = dirname(dirname(dirname($currentFile)));
-                $screenshotsDir = $projectRoot . '/var/tmp/';
+                $screenshotsWebhookDir = $projectRoot . '/var/screenshots/';
+                $screenshotsTmpDir = $projectRoot . '/var/tmp/';
                 
                 $found = false;
                 $filePath = null;
-                $dirs = [];
                 
-                if (is_dir($screenshotsDir)) {
-                    $dirs = glob($screenshotsDir . 'project_*', GLOB_ONLYDIR);
-                    
+                // 1) Ищем в var/screenshots/{uuid}/ (файлы, загруженные через webhook)
+                if (!$found && is_dir($screenshotsWebhookDir)) {
+                    $uuidDirs = glob($screenshotsWebhookDir . '*', GLOB_ONLYDIR) ?: [];
+                    foreach ($uuidDirs as $dir) {
+                        $potentialPath = $dir . '/' . $filename;
+                        if (file_exists($potentialPath)) {
+                            $filePath = $potentialPath;
+                            $found = true;
+                            break;
+                        }
+                        $baseWithoutExt = pathinfo($filename, PATHINFO_FILENAME);
+                        $altMatches = glob($dir . '/' . $baseWithoutExt . '.*');
+                        if (!empty($altMatches) && file_exists($altMatches[0])) {
+                            $filePath = $altMatches[0];
+                            $found = true;
+                            break;
+                        }
+                    }
+                }
+                
+                // 2) Ищем в var/tmp/project_*/ (в т.ч. по имени без расширения — .jpg/.png)
+                if (!$found && is_dir($screenshotsTmpDir)) {
+                    $dirs = glob($screenshotsTmpDir . 'project_*', GLOB_ONLYDIR) ?: [];
+                    $baseWithoutExt = pathinfo($filename, PATHINFO_FILENAME);
                     foreach ($dirs as $dir) {
                         $potentialPath = $dir . '/' . $filename;
                         if (file_exists($potentialPath)) {
@@ -356,23 +374,47 @@ return function (array $context, Request $request) use ($debugMode): Response {
                             $found = true;
                             break;
                         }
+                        $altMatches = glob($dir . '/' . $baseWithoutExt . '.*');
+                        if (!empty($altMatches) && file_exists($altMatches[0])) {
+                            $filePath = $altMatches[0];
+                            $found = true;
+                            break;
+                        }
                     }
                 }
                 
-                // Также проверяем корневую директорию var/tmp/
-                if (!$found) {
-                    $rootPath = $screenshotsDir . $filename;
+                // 3) Корень var/tmp/ (в т.ч. альтернативное расширение)
+                if (!$found && is_dir($screenshotsTmpDir)) {
+                    $rootPath = $screenshotsTmpDir . $filename;
                     if (file_exists($rootPath)) {
                         $filePath = $rootPath;
                         $found = true;
+                    } else {
+                        $baseWithoutExt = pathinfo($filename, PATHINFO_FILENAME);
+                        $altMatches = glob($screenshotsTmpDir . $baseWithoutExt . '.*');
+                        if (!empty($altMatches) && file_exists($altMatches[0])) {
+                            $filePath = $altMatches[0];
+                            $found = true;
+                        }
                     }
                 }
                 
                 if (!$found || !$filePath) {
-                    return new JsonResponse([
+                    $payload = [
                         'success' => false,
                         'error' => 'Скриншот не найден: ' . $filename
-                    ], 404);
+                    ];
+                    if ($debugMode) {
+                        $payload['debug'] = [
+                            'filename' => $filename,
+                            'screenshots_webhook_dir' => $screenshotsWebhookDir,
+                            'screenshots_tmp_dir' => $screenshotsTmpDir,
+                            'webhook_dir_exists' => is_dir($screenshotsWebhookDir),
+                            'webhook_subdirs' => is_dir($screenshotsWebhookDir) ? glob($screenshotsWebhookDir . '*', GLOB_ONLYDIR) : [],
+                            'tmp_project_dirs' => is_dir($screenshotsTmpDir) ? glob($screenshotsTmpDir . 'project_*', GLOB_ONLYDIR) : [],
+                        ];
+                    }
+                    return new JsonResponse($payload, 404);
                 }
                 
                 // Определяем MIME тип
@@ -1209,6 +1251,24 @@ return function (array $context, Request $request) use ($debugMode): Response {
             }
         }
 
+        // Публичный доступ: кнопка "Start Review" — установить статус "in progress" в Google Sheets
+        // Формат: /review/wave/:token/migration/:brzProjectId/start-review
+        if (preg_match('#^/review/wave/([^/]+)/migration/(\d+)/start-review$#', $apiPath, $matches) && $request->getMethod() === 'POST') {
+            try {
+                $token = $matches[1];
+                $brzProjectId = (int)$matches[2];
+                $reviewService = new WaveReviewService();
+                $waveId = $reviewService->validateToken($token);
+                if (!$waveId) {
+                    return new JsonResponse(['success' => false, 'error' => 'Недействительный или истекший токен доступа'], 403);
+                }
+                $reviewService->startProjectReview($token, $brzProjectId);
+                return new JsonResponse(['success' => true, 'message' => 'Статус "in progress" установлен'], 200);
+            } catch (Exception $e) {
+                return new JsonResponse(['success' => false, 'error' => $e->getMessage()], 400);
+            }
+        }
+
         // Публичный доступ для сохранения ревью проекта
         // Формат: /review/wave/:token/migration/:brzProjectId/review
         if (preg_match('#^/review/wave/([^/]+)/migration/(\d+)/review$#', $apiPath, $matches)) {
@@ -1243,6 +1303,7 @@ return function (array $context, Request $request) use ($debugMode): Response {
                     $result = $reviewService->saveProjectReview($token, $brzProjectId, $reviewStatus, $comment);
                     
                     if ($result) {
+                        \Dashboard\Services\WaveService::invalidateWaveDetailsCache($waveId);
                         return new JsonResponse([
                             'success' => true,
                             'message' => 'Ревью успешно сохранено'
@@ -1748,8 +1809,9 @@ return function (array $context, Request $request) use ($debugMode): Response {
                     }
                 }
 
-                // 2) Ищем в var/tmp/project_*/
+                // 2) Ищем в var/tmp/project_*/ (в т.ч. по имени без расширения)
                 if (!$found && is_dir($screenshotsTmpDir)) {
+                    $baseWithoutExt = pathinfo($filename, PATHINFO_FILENAME);
                     $dirs = glob($screenshotsTmpDir . 'project_*', GLOB_ONLYDIR);
                     foreach ($dirs as $dir) {
                         $potentialPath = $dir . '/' . $filename;
@@ -1758,15 +1820,28 @@ return function (array $context, Request $request) use ($debugMode): Response {
                             $found = true;
                             break;
                         }
+                        $altMatches = glob($dir . '/' . $baseWithoutExt . '.*');
+                        if (!empty($altMatches) && file_exists($altMatches[0])) {
+                            $filePath = $altMatches[0];
+                            $found = true;
+                            break;
+                        }
                     }
                 }
 
-                // 3) Корень var/tmp/ (для старых записей)
+                // 3) Корень var/tmp/ (в т.ч. альтернативное расширение)
                 if (!$found && is_dir($screenshotsTmpDir)) {
                     $rootPath = $screenshotsTmpDir . $filename;
                     if (file_exists($rootPath)) {
                         $filePath = $rootPath;
                         $found = true;
+                    } else {
+                        $baseWithoutExt = pathinfo($filename, PATHINFO_FILENAME);
+                        $altMatches = glob($screenshotsTmpDir . $baseWithoutExt . '.*');
+                        if (!empty($altMatches) && file_exists($altMatches[0])) {
+                            $filePath = $altMatches[0];
+                            $found = true;
+                        }
                     }
                 }
 

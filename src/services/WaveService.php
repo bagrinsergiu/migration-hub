@@ -725,6 +725,15 @@ class WaveService
     }
 
     /**
+     * Инвалидировать кэш деталей волны (например, после сохранения ревью проекта).
+     */
+    public static function invalidateWaveDetailsCache(string $waveId): void
+    {
+        $key = 'wave_details_' . $waveId;
+        unset(self::$waveDetailsCache[$key]);
+    }
+
+    /**
      * Обновить статусы миграций в волне на основе API сервера миграции (GET /migration-status).
      *
      * @param string $waveId

@@ -393,16 +393,6 @@ class WaveReviewService
         }
     }
 
-    /**
-     * Сохранить ревью проекта
-     * 
-     * @param string $token Токен ревью
-     * @param int $brzProjectId Brizy Project ID
-     * @param string $reviewStatus Статус ревью (approved, rejected, needs_changes, pending)
-     * @param string|null $comment Комментарий ревью
-     * @return bool
-     * @throws Exception
-     */
     public function saveProjectReview(string $token, int $brzProjectId, string $reviewStatus, ?string $comment = null): bool
     {
         // Валидируем токен и получаем token_id
@@ -451,11 +441,24 @@ class WaveReviewService
             unset($data['token_id']); // Не обновляем token_id
             unset($data['brz_project_id']); // Не обновляем brz_project_id
             $result = $db->update('project_reviews', $data, ['id' => $existing['id']]);
-            return $result !== false;
+            $saved = $result !== false;
         } else {
             // Создаем новую запись
-            return (bool)$db->insert('project_reviews', $data);
+            $saved = (bool)$db->insert('project_reviews', $data);
         }
+
+        // При успешном сохранении обновляем Google Sheets: статус "Done", комментарий, светло-зелёная ячейка
+        if ($saved) {
+            try {
+                $googleSheetsService = new GoogleSheetsService();
+                $googleSheetsService->updateManualReviewForMigration($mbProjectUuid, 'Done', $comment);
+            } catch (Exception $e) {
+                error_log('[WaveReviewService::saveProjectReview] Ошибка обновления Google Sheets: ' . $e->getMessage());
+                // Не прерываем — ревью уже сохранено в БД
+            }
+        }
+
+        return $saved;
     }
 
     /**
@@ -482,6 +485,40 @@ class WaveReviewService
         );
         
         return $review ?: null;
+    }
+
+    /**
+     * Установить статус "in progress" в Google Sheets для проекта (кнопка "Start Review")
+     *
+     * @param string $token Токен ревью
+     * @param int $brzProjectId Brizy Project ID
+     * @return bool
+     * @throws Exception
+     */
+    public function startProjectReview(string $token, int $brzProjectId): bool
+    {
+        $tokenInfo = $this->getTokenInfo($token);
+        if (!$tokenInfo) {
+            throw new Exception('Недействительный токен');
+        }
+
+        $migrationService = new MigrationService();
+        $migrationDetails = $migrationService->getMigrationDetails($brzProjectId);
+
+        if (!$migrationDetails || !isset($migrationDetails['mapping']['mb_project_uuid'])) {
+            throw new Exception('Проект не найден');
+        }
+
+        $mbProjectUuid = $migrationDetails['mapping']['mb_project_uuid'];
+
+        try {
+            $googleSheetsService = new GoogleSheetsService();
+            $googleSheetsService->updateManualReviewForMigration($mbProjectUuid, 'in progress', null);
+            return true;
+        } catch (Exception $e) {
+            error_log('[WaveReviewService::startProjectReview] Ошибка: ' . $e->getMessage());
+            throw $e;
+        }
     }
 
     public function getProjectReviewsByToken(string $token): array
