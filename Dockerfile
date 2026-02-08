@@ -5,6 +5,9 @@ ENV COMPOSER_AUTH ${COMPOSER_AUTH}
 WORKDIR /vendor
 COPY ./composer.json ./
 COPY ./composer.lock* ./
+# Нужны src/ и lib/ для генерации autoload (classmap и PSR-4)
+COPY ./src ./src
+COPY ./lib ./lib
 
 RUN composer install --ignore-platform-reqs --prefer-dist --no-interaction --no-progress --optimize-autoloader --no-scripts --no-dev
 
@@ -77,12 +80,11 @@ COPY .docker/rsyslog/rsyslog.conf /etc/rsyslog.conf
 COPY .docker/entrypoint.sh /usr/local/bin/docker-entrypoint
 RUN chmod +x /usr/local/bin/docker-entrypoint
 
-# Копируем код проекта
-COPY . .
+# Копируем код проекта (--chown сразу, без медленного chown -R по всему дереву)
+COPY --chown=www-data:www-data . .
 
-# Устанавливаем права
-RUN chown -R www-data:www-data /project && \
-    chmod -R 755 /project/var
+# Только права на var (логи, кэш, скриншоты) — мало файлов, быстро
+RUN chmod -R 755 /project/var
 
 # Download tini для корректной обработки сигналов
 ARG TINI_VERSION='v0.19.0'
@@ -97,8 +99,10 @@ COPY --from=stage_composer /usr/bin/composer /usr/bin/composer
 
 ARG PHP_FPM_INI_DIR="/usr/local/etc/php"
 
-# Установка Xdebug для разработки
-RUN pecl install xdebug && docker-php-ext-enable xdebug
+# Xdebug через install-php-extensions (обычно быстрее pecl — пребилды при наличии)
+ADD --chmod=0755 https://github.com/mlocati/docker-php-extension-installer/releases/latest/download/install-php-extensions /usr/local/bin/
+RUN install-php-extensions xdebug
+
 COPY .docker/conf.d/xdebug.ini "${PHP_FPM_INI_DIR}/conf.d/xdebug.ini"
 
-RUN chown -R www-data:www-data /project
+# В dev при volume ./:/project права задаёт хост, chown в образе не нужен

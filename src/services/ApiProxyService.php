@@ -128,6 +128,60 @@ class ApiProxyService
     }
 
     /**
+     * Взаимное рукопожатие с сервером миграции: дашборд дергает сервер, сервер отвечает идентичностью
+     * и сам дергает дашборд (dashboard_callback_url). По ответу видно, что оба знают друг друга.
+     *
+     * @return array { success, migration_server: {...}, handshake_with_dashboard: 'ok'|'fail', ... }
+     */
+    public function getMigrationServerHandshake(): array
+    {
+        $dashboardBaseUrl = $_ENV['DASHBOARD_BASE_URL'] ?? getenv('DASHBOARD_BASE_URL') ?: '';
+        $dashboardBaseUrl = rtrim($dashboardBaseUrl, '/');
+        if ($dashboardBaseUrl === '') {
+            $dashboardBaseUrl = 'http://localhost:8088';
+        }
+        $callbackUrl = $dashboardBaseUrl . '/api/webhooks/test-connection';
+        $handshakeUrl = $this->baseUrl . '/dashboard-handshake?dashboard_callback_url=' . rawurlencode($callbackUrl);
+
+        $ch = curl_init($handshakeUrl);
+        curl_setopt_array($ch, [
+            CURLOPT_RETURNTRANSFER => true,
+            CURLOPT_TIMEOUT => 15,
+            CURLOPT_CONNECTTIMEOUT => 5,
+            CURLOPT_HTTPHEADER => ['Accept: application/json'],
+        ]);
+        $response = @curl_exec($ch);
+        $httpCode = (int) curl_getinfo($ch, CURLINFO_HTTP_CODE);
+        $error = curl_error($ch);
+        curl_close($ch);
+
+        if ($error || $httpCode < 200 || $httpCode >= 300) {
+            return [
+                'success' => false,
+                'message' => $error ?: "HTTP {$httpCode}",
+                'http_code' => $httpCode,
+                'migration_server' => null,
+                'handshake_with_dashboard' => 'fail',
+            ];
+        }
+
+        $data = is_string($response) ? json_decode($response, true) : [];
+        $handshake = $data['handshake_with_dashboard'] ?? 'fail';
+        return [
+            'success' => true,
+            'migration_server' => [
+                'service' => $data['service'] ?? null,
+                'server_id' => $data['server_id'] ?? null,
+                'client_ip' => $data['client_ip'] ?? null,
+                'timestamp' => $data['timestamp'] ?? null,
+            ],
+            'handshake_with_dashboard' => $handshake,
+            'handshake_error' => $data['handshake_error'] ?? null,
+            'http_code' => $httpCode,
+        ];
+    }
+
+    /**
      * Запустить миграцию через существующий API
      * 
      * @param array $params
@@ -206,21 +260,18 @@ class ApiProxyService
         }
         
         // Добавляем параметры веб-хука для обратного вызова
-        // Определяем URL дашборда для веб-хука
-        $dashboardBaseUrl = $_ENV['DASHBOARD_URL'] ?? getenv('DASHBOARD_URL') 
-            ?? $_ENV['DASHBOARD_BASE_URL'] ?? getenv('DASHBOARD_BASE_URL') 
-            ?: 'http://localhost:8088';
-        $webhookUrl = rtrim($dashboardBaseUrl, '/') . '/api/webhooks/migration-result';
-        
-        // Передаем URL веб-хука и идентификаторы миграции
-        $queryParams['webhook_url'] = $webhookUrl;
+        // DASHBOARD_WEBHOOK_BASE_URL — URL, по которому контейнер миграции достучится до дашборда (например http://mb_dashboard:80)
+        $webhookBaseUrl = $_ENV['DASHBOARD_WEBHOOK_BASE_URL'] ?? getenv('DASHBOARD_WEBHOOK_BASE_URL') ?: null;
+        if ($webhookBaseUrl === null || $webhookBaseUrl === '') {
+            $webhookBaseUrl = $_ENV['DASHBOARD_BASE_URL'] ?? getenv('DASHBOARD_BASE_URL')
+                ?: $_ENV['DASHBOARD_URL'] ?? getenv('DASHBOARD_URL')
+                ?: 'http://localhost:8088';
+        }
+        $webhookBaseUrl = rtrim((string)$webhookBaseUrl, '/');
+        $webhookUrl = $webhookBaseUrl . '/api/webhooks/migration-result';
+        $queryParams['webhook_url'] = !empty($params['webhook_url']) ? $params['webhook_url'] : $webhookUrl;
         $queryParams['webhook_mb_project_uuid'] = $params['mb_project_uuid'];
         $queryParams['webhook_brz_project_id'] = (int)$params['brz_project_id'];
-        
-        // Если передан кастомный URL веб-хука, используем его
-        if (!empty($params['webhook_url'])) {
-            $queryParams['webhook_url'] = $params['webhook_url'];
-        }
         
         $url = $this->baseUrl . '/?' . http_build_query($queryParams);
         

@@ -41,6 +41,7 @@ services:
       - ./var/tmp:/project/var/tmp
     networks:
       - dashboard_network
+      - migration_shared
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost/api/health"]
       interval: 30s
@@ -90,6 +91,9 @@ services:
 networks:
   dashboard_network:
     driver: bridge
+  # Общая сеть с контейнером миграции (MB-migration). Создать один раз: docker network create migration_shared
+  migration_shared:
+    external: true
 
 # volumes:
 #   mysql_data:

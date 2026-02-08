@@ -21,6 +21,14 @@ export default function MigrationsList() {
     loadAllMigrations();
   }, []);
 
+  // Пока есть миграции in_progress — подтягиваем список каждые 10 сек, чтобы подхватить обновление по вебхуку
+  const hasInProgress = allMigrations.some(m => m.status === 'in_progress');
+  useEffect(() => {
+    if (!hasInProgress) return;
+    const interval = setInterval(loadAllMigrations, 10000);
+    return () => clearInterval(interval);
+  }, [hasInProgress]);
+
   // Фильтруем миграции локально
   const filteredMigrations = allMigrations.filter(migration => {
     if (filters.status) {
@@ -219,10 +227,11 @@ export default function MigrationsList() {
                 </td>
               </tr>
             ) : (
-              filteredMigrations.map((migration) => {
+              filteredMigrations.map((migration, index) => {
                 const statusConfig = getStatusConfig(migration.status);
+                const rowKey = migration.id ?? migration.brz_project_id ?? migration.mb_project_uuid ?? `row-${index}`;
                 return (
-                  <tr key={migration.id}>
+                  <tr key={rowKey}>
                     <td>{migration.brz_project_id}</td>
                     <td className="uuid-cell">{formatUUID(migration.mb_project_uuid)}</td>
                     <td>{migration.brz_project_id}</td>

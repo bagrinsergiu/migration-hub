@@ -22,7 +22,7 @@
 - **Данные:** `MigrationService::getMigrationDetails($id)`:
   - маппинг из `migrations_mapping` по `brz_project_id`;
   - результат из `migration_result_list` по `mb_project_uuid`;
-  - при статусе `in_progress` и отсутствии процесса — `checkAndUpdateStaleStatus()` (обновление по логам / lock-файлу);
+  - при статусе `in_progress` — `checkAndUpdateStaleStatus()` (опрос API сервера миграции GET /migration-status и синхронизация БД);
   - итоговый статус — `determineStatus(result, mapping)`.
 - **Фронт:** `MigrationDetails.tsx` — при открытии: `loadDetails()` (GET details), `loadProcessInfo()`, `loadWebhookInfo()`.
 
@@ -56,7 +56,7 @@
 Источник истины для UI — **БД**, обновляемая вебхуком (и при необходимости `checkAndUpdateStaleStatus`).
 
 - **На странице деталей** при активной миграции (`in_progress` или процесс запущен):
-  - каждые **3 секунды**: `refreshDetails()` → `GET /api/migrations/:id` (те же детали + статус из БД) и `loadProcessInfo()` → `GET /api/migrations/:id/process` (lock-файл, процесс).
+  - каждые **3 секунды**: `refreshDetails()` → `GET /api/migrations/:id` и `loadProcessInfo()` → `GET /api/migrations/:id/process` (статус только через API сервера миграции GET /migration-status).
 - **Опционально:** в блоке «Вебхук» при загрузке один раз запрашивается `GET /api/migrations/:id/webhook-info`, который внутри может вызвать опрос сервера миграции (`ApiProxyService::getMigrationStatusFromServer`) и вернуть `server_status` для отладки. Для основного отображения статуса это не обязательно — достаточно опроса БД через `GET /api/migrations/:id`.
 
 ---
@@ -67,7 +67,7 @@
 |----------|------------|
 | `GET /api/migrations` | Список миграций (статус из БД). |
 | `GET /api/migrations/:id` | Детали и текущий статус миграции (основной опрос). |
-| `GET /api/migrations/:id/process` | Статус процесса: приоритет — опрос API сервера миграции (`/migration-status`); при недоступности — fallback на lock-файл и локальный процесс. При ответе сервера «completed»/«error» дашборд синхронизирует БД. |
+| `GET /api/migrations/:id/process` | Статус процесса только через API сервера миграции (GET /migration-status). При ответе «completed»/«error» дашборд синхронизирует БД. |
 | `GET /api/migrations/:id/webhook-info` | URL вебхука, факт прихода, при желании — статус с сервера. |
 | `POST /api/webhooks/migration-result` | Приём результата от сервера миграции (обновление БД). |
 

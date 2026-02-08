@@ -92,12 +92,18 @@ class MigrationExecutionService
         }
 
         // Параметры веб-хука для обратного вызова (сервер миграции вызовет webhook_url по завершении)
-        $dashboardBaseUrl = $_ENV['DASHBOARD_URL'] ?? getenv('DASHBOARD_URL') 
-            ?? $_ENV['DASHBOARD_BASE_URL'] ?? getenv('DASHBOARD_BASE_URL') 
-            ?: 'http://localhost:8088';
+        // Используем DASHBOARD_WEBHOOK_BASE_URL — URL, по которому контейнер миграции достучится до дашборда (например http://mb_dashboard:80)
+        $webhookBaseUrl = $_ENV['DASHBOARD_WEBHOOK_BASE_URL'] ?? getenv('DASHBOARD_WEBHOOK_BASE_URL') ?: null;
+        if ($webhookBaseUrl === null || $webhookBaseUrl === '') {
+            // Сначала DASHBOARD_BASE_URL (часто в .env), потом DASHBOARD_URL (часто localhost в окружении)
+            $webhookBaseUrl = $_ENV['DASHBOARD_BASE_URL'] ?? getenv('DASHBOARD_BASE_URL')
+                ?: $_ENV['DASHBOARD_URL'] ?? getenv('DASHBOARD_URL')
+                ?: 'http://localhost:8088';
+        }
+        $webhookBaseUrl = rtrim((string)$webhookBaseUrl, '/');
         $queryParams['webhook_url'] = !empty($params['webhook_url'])
             ? $params['webhook_url']
-            : rtrim($dashboardBaseUrl, '/') . '/api/webhooks/migration-result';
+            : $webhookBaseUrl . '/api/webhooks/migration-result';
         $queryParams['webhook_mb_project_uuid'] = $params['mb_project_uuid'];
         $queryParams['webhook_brz_project_id'] = (int)$params['brz_project_id'];
 
@@ -202,10 +208,14 @@ class MigrationExecutionService
         $migrationMap = []; // Маппинг curl handle -> индекс миграции
 
         // Базовый URL веб-хука (сервер миграции вызовет его по завершении каждой миграции)
-        $dashboardBaseUrl = $_ENV['DASHBOARD_URL'] ?? getenv('DASHBOARD_URL') 
-            ?? $_ENV['DASHBOARD_BASE_URL'] ?? getenv('DASHBOARD_BASE_URL') 
-            ?: 'http://localhost:8088';
-        $baseWebhookUrl = rtrim($dashboardBaseUrl, '/') . '/api/webhooks/migration-result';
+        // DASHBOARD_WEBHOOK_BASE_URL — URL, по которому контейнер миграции достучится до дашборда (например http://mb_dashboard:80)
+        $webhookBaseUrl = $_ENV['DASHBOARD_WEBHOOK_BASE_URL'] ?? getenv('DASHBOARD_WEBHOOK_BASE_URL') ?: null;
+        if ($webhookBaseUrl === null || $webhookBaseUrl === '') {
+            $webhookBaseUrl = $_ENV['DASHBOARD_BASE_URL'] ?? getenv('DASHBOARD_BASE_URL')
+                ?: $_ENV['DASHBOARD_URL'] ?? getenv('DASHBOARD_URL')
+                ?: 'http://localhost:8088';
+        }
+        $baseWebhookUrl = rtrim((string)$webhookBaseUrl, '/') . '/api/webhooks/migration-result';
 
         try {
             while (!empty($pending) || !empty($activeHandles)) {

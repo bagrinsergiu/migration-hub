@@ -619,37 +619,89 @@ class WaveService
             return $cached;
         }
 
-        $wave = $this->dbService->getWave($waveId);
+        try {
+            try {
+                $wave = $this->dbService->getWave($waveId);
+            } catch (\Throwable $e) {
+                WaveLogger::warning('getWave threw, trying fallback', ['wave_id' => $waveId, 'error' => $e->getMessage()]);
+                $wave = null;
+            }
 
-        if (!$wave) {
+            if (!$wave) {
+                // Fallback: волна есть в списке, но getWave не нашёл/выбросил — собираем из getWavesList
+                $wavesList = $this->dbService->getWavesList();
+                foreach ($wavesList as $w) {
+                    if (($w['id'] ?? '') === $waveId) {
+                        $wave = [
+                            'id' => $w['id'],
+                            'name' => $w['name'],
+                            'workspace_id' => $w['workspace_id'],
+                            'workspace_name' => $w['workspace_name'] ?? '',
+                            'project_uuids' => [],
+                            'batch_size' => 3,
+                            'mgr_manual' => false,
+                            'enable_cloning' => false,
+                            'status' => $w['status'] ?? 'pending',
+                            'progress' => $w['progress'] ?? ['total' => 0, 'completed' => 0, 'failed' => 0],
+                            'migrations' => [],
+                            'created_at' => $w['created_at'],
+                            'updated_at' => $w['updated_at'],
+                            'completed_at' => $w['completed_at'] ?? null,
+                        ];
+                        break;
+                    }
+                }
+            }
+
+            if (!$wave) {
+                WaveLogger::warning('getWaveDetails: волна не найдена в БД', ['wave_id' => $waveId]);
+                error_log('[WaveService::getWaveDetails] Волна не найдена в БД: wave_id=' . $waveId . ' (getWave вернул null, fallback не нашёл в списке)');
+                return null;
+            }
+
+            try {
+                $migrations = $this->dbService->getWaveMigrationsByWaveId($waveId);
+                if (empty($migrations)) {
+                    $migrations = $this->dbService->getWaveMigrationsFromTables($waveId);
+                }
+            } catch (\Throwable $e) {
+                WaveLogger::error('getWaveMigrationsByWaveId failed', ['wave_id' => $waveId, 'error' => $e->getMessage()]);
+                try {
+                    $migrations = $this->dbService->getWaveMigrationsFromTables($waveId);
+                } catch (\Throwable $e2) {
+                    $migrations = [];
+                }
+            }
+
+            // Обновление статусов по API сервера миграции только для активных волн
+            $status = $wave['status'] ?? 'pending';
+            if ($status === 'in_progress' || $status === 'pending') {
+                try {
+                    $this->updateMigrationStatusesFromMonitoring($waveId, $migrations);
+                    $migrations = $this->dbService->getWaveMigrationsByWaveId($waveId);
+                } catch (\Throwable $e) {
+                    WaveLogger::warning('updateMigrationStatusesFromMonitoring failed', ['wave_id' => $waveId, 'error' => $e->getMessage()]);
+                }
+            }
+
+            $sheets = $this->getWaveSheets($waveId);
+            $wave['sheets'] = $sheets;
+
+            $result = [
+                'wave' => $wave,
+                'migrations' => $migrations,
+            ];
+            self::setWaveDetailsCache($cacheKey, $result, 2);
+            return $result;
+        } catch (\Throwable $e) {
+            WaveLogger::error('getWaveDetails exception', ['wave_id' => $waveId, 'error' => $e->getMessage(), 'trace' => $e->getTraceAsString()]);
+            error_log('[WaveService::getWaveDetails] wave_id=' . $waveId . ': ' . $e->getMessage());
             return null;
         }
-
-        $migrations = $this->dbService->getWaveMigrations($waveId);
-
-        // Обновление статусов по lock/процессам только для активных волн
-        $status = $wave['status'] ?? 'pending';
-        if ($status === 'in_progress' || $status === 'pending') {
-            $this->updateMigrationStatusesFromMonitoring($waveId, $migrations);
-            $migrations = $this->dbService->getWaveMigrations($waveId);
-        }
-
-        $sheets = $this->getWaveSheets($waveId);
-        $wave['sheets'] = $sheets;
-
-        $result = [
-            'wave' => $wave,
-            'migrations' => $migrations,
-        ];
-        self::setWaveDetailsCache($cacheKey, $result, 2);
-        return $result;
     }
     
     /**
-     * Обновить статусы миграций в волне на основе мониторинга (lock-файлы, процессы)
-     * 
-     * @param string $waveId ID волны
-     * @return void
+     * Получить кэш деталей волны по ключу.
      */
     private static function getWaveDetailsCache(string $key): ?array
     {
@@ -673,8 +725,10 @@ class WaveService
     }
 
     /**
+     * Обновить статусы миграций в волне на основе API сервера миграции (GET /migration-status).
+     *
      * @param string $waveId
-     * @param array|null $migrations Предзагруженный список миграций (избегаем лишнего getWaveMigrations)
+     * @param array|null $migrations Предзагруженный список миграций
      */
     private function updateMigrationStatusesFromMonitoring(string $waveId, ?array $migrations = null): void
     {
@@ -685,181 +739,62 @@ class WaveService
             if (empty($migrations)) {
                 return;
             }
-            
+
             $migrationService = new MigrationService();
             $updatedMigrations = [];
             $hasUpdates = false;
-            
+
             foreach ($migrations as $migration) {
                 $mbUuid = $migration['mb_project_uuid'] ?? null;
                 $brzProjectId = (int)($migration['brz_project_id'] ?? 0);
                 $currentStatus = $migration['status'] ?? 'pending';
-                
-                if (!$mbUuid) {
+
+                if (!$mbUuid || $brzProjectId <= 0) {
                     continue;
                 }
-                
-                // Пропускаем миграции, которые уже завершены или в ошибке
                 if ($currentStatus === 'completed' || $currentStatus === 'error') {
                     continue;
                 }
-                
-                // Получаем информацию о процессе через мониторинг
-                // ВАЖНО: Если brz_project_id = 0, проверяем все lock-файлы для mb_uuid
-                $processInfo = null;
-                $lockFileExists = false;
-                $processRunning = false;
-                $lockFileAge = 999999;
-                
-                if ($brzProjectId > 0) {
-                    // Если brz_project_id известен, используем стандартный мониторинг
-                    $processInfo = $migrationService->getMigrationProcessInfo($mbUuid, $brzProjectId);
-                    $processRunning = $processInfo['process']['running'] ?? false;
-                    $lockFileExists = $processInfo['lock_file_exists'] ?? false;
-                    $lockFileAge = $processInfo['process']['lock_file_age'] ?? 999999;
-                } else {
-                    // Если brz_project_id = 0, ищем lock-файлы по mb_uuid
-                    // Проверяем все возможные lock-файлы для этого mb_uuid
-                    $projectRoot = dirname(__DIR__, 3);
-                    $cachePath = $_ENV['CACHE_PATH'] ?? getenv('CACHE_PATH') ?: $projectRoot . '/var/cache';
-                    $lockFilePattern = $cachePath . '/' . $mbUuid . '-*.lock';
-                    $lockFiles = glob($lockFilePattern);
-                    
-                    if (!empty($lockFiles)) {
-                        // Найден хотя бы один lock-файл
-                        $lockFileExists = true;
-                        // Берем самый свежий lock-файл
-                        $newestLockFile = null;
-                        $newestMtime = 0;
-                        foreach ($lockFiles as $lockFile) {
-                            $mtime = filemtime($lockFile);
-                            if ($mtime > $newestMtime) {
-                                $newestMtime = $mtime;
-                                $newestLockFile = $lockFile;
-                            }
-                        }
-                        
-                        if ($newestLockFile) {
-                            $lockFileAge = time() - $newestMtime;
-                            
-                            // Пытаемся извлечь brz_project_id из имени файла или содержимого
-                            if (preg_match('/' . preg_quote($mbUuid, '/') . '-(\d+)\.lock$/', $newestLockFile, $matches)) {
-                                $foundBrzProjectId = (int)$matches[1];
-                                if ($foundBrzProjectId > 0) {
-                                    // Обновляем brz_project_id и проверяем процесс
-                                    $brzProjectId = $foundBrzProjectId;
-                                    $processInfo = $migrationService->getMigrationProcessInfo($mbUuid, $brzProjectId);
-                                    $processRunning = $processInfo['process']['running'] ?? false;
-                                }
-                            }
-                            
-                            // Если процесс не найден, проверяем содержимое lock-файла
-                            if (!$processRunning) {
-                                $lockContent = @file_get_contents($newestLockFile);
-                                if ($lockContent) {
-                                    $lockData = json_decode($lockContent, true);
-                                    if ($lockData && isset($lockData['pid'])) {
-                                        $pid = (int)$lockData['pid'];
-                                        if ($pid > 0) {
-                                            // Проверяем процесс по PID
-                                            $command = sprintf('ps -p %d -o pid= 2>/dev/null', $pid);
-                                            $psOutput = @shell_exec($command);
-                                            $processRunning = !empty(trim($psOutput ?? ''));
-                                            
-                                            // Если нашли brz_project_id в lock-файле, обновляем
-                                            if (isset($lockData['brz_project_id']) && $lockData['brz_project_id'] > 0) {
-                                                $brzProjectId = (int)$lockData['brz_project_id'];
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
+
+                $processInfo = $migrationService->getMigrationProcessInfo($mbUuid, $brzProjectId);
+                $serverStatus = $processInfo['server_status'] ?? null;
+                $apiStatus = $serverStatus['status'] ?? $processInfo['process']['status'] ?? null;
+                if ($apiStatus === 'success') {
+                    $apiStatus = 'completed';
                 }
-                
-                // Определяем новый статус на основе мониторинга
+                if (in_array($apiStatus, ['failed'], true)) {
+                    $apiStatus = 'error';
+                }
+
                 $newStatus = $currentStatus;
-                $error = null;
-                
-                if ($processRunning) {
-                    // Процесс запущен - статус in_progress
+                $error = $serverStatus['error'] ?? null;
+                if ($apiStatus === 'in_progress' || $apiStatus === 'running') {
                     $newStatus = 'in_progress';
-                } elseif ($lockFileExists) {
-                    // Lock-файл существует, но процесс не найден
-                    // Проверяем возраст lock-файла
-                    if ($lockFileAge > 600) {
-                        // Lock-файл старый (более 10 минут) - считаем ошибкой
-                        $newStatus = 'error';
-                        $error = 'Процесс миграции не найден, lock-файл устарел';
-                    } else {
-                        // Lock-файл свежий - возможно процесс только что запустился
-                        $newStatus = 'in_progress';
-                    }
-                } else {
-                    // Lock-файл не существует
-                    if ($currentStatus === 'in_progress') {
-                        // КРИТИЧНО: Перед установкой статуса error, проверяем логи миграции
-                        // Если миграция завершилась успешно, обновляем статус на completed
-                        $migrationCompleted = false;
-                        
-                        try {
-                            $migrationCompleted = $migrationService->checkMigrationCompletedFromLogs($brzProjectId);
-                        } catch (Exception $e) {
-                            // Игнорируем ошибки проверки логов
-                            WaveLogger::warning("Ошибка проверки логов миграции", [
-                                'wave_id' => $waveId,
-                                'mb_uuid' => $mbUuid,
-                                'brz_project_id' => $brzProjectId,
-                                'error' => $e->getMessage()
-                            ]);
-                        }
-                        
-                        if ($migrationCompleted) {
-                            // Миграция завершилась успешно
-                            $newStatus = 'completed';
-                            $error = null;
-                        } else {
-                            // Миграция не завершилась или завершилась с ошибкой
-                            $newStatus = 'error';
-                            $error = 'Lock-файл не найден, процесс миграции не запущен';
-                        }
-                    }
-                    // Если статус pending, оставляем как есть
+                    $error = null;
+                } elseif ($apiStatus === 'completed') {
+                    $newStatus = 'completed';
+                    $error = null;
+                } elseif ($apiStatus === 'error') {
+                    $newStatus = 'error';
                 }
-                
-                // Обновляем статус, если он изменился, или если нашли brz_project_id
-                $foundBrzProjectId = ($brzProjectId > 0 && $brzProjectId !== (int)($migration['brz_project_id'] ?? 0));
-                if ($newStatus !== $currentStatus || $foundBrzProjectId) {
+                // pending или недоступный API — не меняем статус
+
+                if ($newStatus !== $currentStatus) {
                     $updatedMigrations[] = [
                         'mb_project_uuid' => $mbUuid,
-                        'brz_project_id' => $brzProjectId, // Обновляем brz_project_id, даже если он был найден из lock-файла
+                        'brz_project_id' => $brzProjectId,
                         'status' => $newStatus,
                         'error' => $error
                     ];
                     $hasUpdates = true;
-                    
-                    WaveLogger::info("Обновление статуса миграции на основе мониторинга", [
+                    WaveLogger::info("Обновление статуса миграции по API сервера", [
                         'wave_id' => $waveId,
                         'mb_uuid' => $mbUuid,
                         'brz_project_id' => $brzProjectId,
                         'old_status' => $currentStatus,
                         'new_status' => $newStatus,
-                        'error' => $error,
-                        'process_running' => $processRunning,
-                        'lock_file_exists' => $lockFileExists,
-                        'lock_file_age' => $lockFileAge
+                        'api_status' => $apiStatus
                     ]);
-                    
-                    // Если нашли brz_project_id из lock-файла, обновляем его
-                    if ($brzProjectId > 0 && $brzProjectId !== (int)($migration['brz_project_id'] ?? 0)) {
-                        WaveLogger::info("Обнаружен brz_project_id из lock-файла", [
-                            'wave_id' => $waveId,
-                            'mb_uuid' => $mbUuid,
-                            'old_brz_project_id' => $migration['brz_project_id'] ?? 0,
-                            'new_brz_project_id' => $brzProjectId
-                        ]);
-                    }
                 }
             }
             
@@ -920,7 +855,7 @@ class WaveService
                 // Обновляем в БД
                 $this->dbService->updateWaveProgress($waveId, $progress, $waveMigrations, $waveStatus);
                 
-                WaveLogger::info("Статусы миграций обновлены на основе мониторинга", [
+                WaveLogger::info("Статусы миграций обновлены по API сервера", [
                     'wave_id' => $waveId,
                     'updated_count' => count($updatedMigrations),
                     'progress' => $progress,
@@ -928,11 +863,10 @@ class WaveService
                 ]);
             }
         } catch (Exception $e) {
-            // Логируем ошибку, но не прерываем выполнение
             $logFile = dirname(__DIR__, 3) . '/var/log/wave_dashboard.log';
-            $errorMsg = "[" . date('Y-m-d H:i:s') . "] [ERROR] ❌ ОШИБКА обновления статусов на основе мониторинга: wave_id={$waveId}, error=" . $e->getMessage() . "\n";
+            $errorMsg = "[" . date('Y-m-d H:i:s') . "] [ERROR] Ошибка обновления статусов по API: wave_id={$waveId}, error=" . $e->getMessage() . "\n";
             @file_put_contents($logFile, $errorMsg, FILE_APPEND);
-            WaveLogger::error("Ошибка обновления статусов на основе мониторинга", [
+            WaveLogger::error("Ошибка обновления статусов по API сервера", [
                 'wave_id' => $waveId,
                 'error' => $e->getMessage(),
                 'trace' => $e->getTraceAsString()
@@ -1203,7 +1137,7 @@ class WaveService
 
     /**
      * Массовый перезапуск миграций в волне
-     * Очищает кэш, lock-файлы и БД записи, затем перезапускает миграции
+     * Очищает кэш и БД записи, затем перезапускает миграции (блокировка на сервере миграции)
      * 
      * @param string $waveId ID волны
      * @param array $mbUuids Массив UUID проектов для перезапуска (если пустой - все миграции)
@@ -1282,7 +1216,7 @@ class WaveService
             error_log("[WaveService::restartAllMigrationsInWave] ОШИБКА при обновлении статуса волны: " . $e->getMessage());
         }
 
-        // Очищаем кэш, lock-файлы и сбрасываем статус для каждой миграции; собираем массив для executeBatch
+        // Очищаем кэш и сбрасываем статус для каждой миграции; собираем массив для executeBatch
         error_log("[WaveService::restartAllMigrationsInWave] Начало обработки " . count($migrations) . " миграций...");
         $migrationsArray = [];
         $batchSize = (int)($wave['batch_size'] ?? 3);
@@ -1342,7 +1276,7 @@ class WaveService
                             $detail['lock_removed'] = $lockResult['removed'] ?? false;
                         }
                     } catch (Exception $e) {
-                        $detail['error'] = 'Ошибка удаления lock-файла: ' . $e->getMessage();
+                        $detail['error'] = 'Ошибка снятия блокировки: ' . $e->getMessage();
                     }
                     try {
                         $cacheResult = $migrationService->removeMigrationCache($mbUuid, $brzProjectId);
@@ -2017,45 +1951,16 @@ class WaveService
     }
 
     /**
-     * Удалить lock-файл миграции
-     * 
-     * @param string $mbUuid UUID проекта MB
-     * @param int $brzProjectId ID проекта Brizy
-     * @return array
-     * @throws Exception
+     * «Удаление» блокировки миграции. Блокировка управляется сервером миграции (API).
+     * Для повторного запуска используйте «Перезапуск» или «Сброс статуса».
      */
     public function removeMigrationLock(string $mbUuid, int $brzProjectId): array
     {
-        $projectRoot = dirname(__DIR__, 3);
-        $cachePath = $_ENV['CACHE_PATH'] ?? getenv('CACHE_PATH') ?: $projectRoot . '/var/cache';
-        
-        // Формируем путь к lock-файлу (как в ApplicationBootstrapper)
-        $lockFile = $cachePath . '/' . $mbUuid . '-' . $brzProjectId . '.lock';
-        
-        if (!file_exists($lockFile)) {
-            return [
-                'success' => true,
-                'message' => 'Lock-файл не найден (возможно, уже удален)',
-                'lock_file' => $lockFile,
-                'removed' => false
-            ];
-        }
-        
-        if (!is_writable($lockFile) && !is_writable($cachePath)) {
-            throw new Exception('Нет прав на удаление lock-файла: ' . $lockFile);
-        }
-        
-        $removed = @unlink($lockFile);
-        
-        if (!$removed) {
-            throw new Exception('Не удалось удалить lock-файл: ' . $lockFile);
-        }
-        
         return [
             'success' => true,
-            'message' => 'Lock-файл успешно удален',
-            'lock_file' => $lockFile,
-            'removed' => true
+            'message' => 'Блокировка управляется сервером миграции. Для повторного запуска используйте «Перезапуск» или «Сброс статуса».',
+            'lock_file' => null,
+            'removed' => false
         ];
     }
 

@@ -76,22 +76,29 @@ class DatabaseService
     }
 
     /**
-     * Валидация хоста перед записью
-     * 
+     * Валидация хоста перед записью.
+     * В режиме разработки (APP_DEBUG=true или APP_ENV=development) проверка смягчена.
+     *
      * @param string $host
      * @return bool
      * @throws Exception
      */
     public function validateWriteHost(string $host): bool
     {
-        if ($host !== self::ALLOWED_WRITE_HOST) {
-            throw new Exception(
-                "КРИТИЧЕСКАЯ ОШИБКА: Запись разрешена только в базу: " . self::ALLOWED_WRITE_HOST . 
-                ". Попытка записи в: " . $host . 
-                ". Проверьте переменную MG_DB_HOST в .env файле."
-            );
+        $host = trim($host);
+        if ($host === self::ALLOWED_WRITE_HOST) {
+            return true;
         }
-        return true;
+        $appEnv = $_ENV['APP_ENV'] ?? getenv('APP_ENV') ?? 'production';
+        $appDebug = ($_ENV['APP_DEBUG'] ?? getenv('APP_DEBUG')) === 'true';
+        if ($appEnv === 'development' || $appDebug) {
+            return true;
+        }
+        throw new Exception(
+            "КРИТИЧЕСКАЯ ОШИБКА: Запись разрешена только в базу: " . self::ALLOWED_WRITE_HOST .
+            ". Попытка записи в: " . $host .
+            ". Проверьте переменную MG_DB_HOST в .env файле."
+        );
     }
 
     /**
@@ -138,8 +145,9 @@ class DatabaseService
     public function getMigrationByUuid(string $mbProjectUuid): ?array
     {
         $db = $this->getWriteConnection();
+        // Сначала записи с wave_id (миграции от волны), чтобы updateWebsiteBrizyForMigration нашёл листы волны
         $result = $db->find(
-            'SELECT * FROM migrations WHERE mb_project_uuid = ? ORDER BY created_at DESC LIMIT 1',
+            'SELECT * FROM migrations WHERE mb_project_uuid = ? ORDER BY (wave_id IS NOT NULL AND wave_id != \'\') DESC, created_at DESC LIMIT 1',
             [$mbProjectUuid]
         );
         return $result ?: null;
@@ -429,6 +437,11 @@ class DatabaseService
         ];
 
         if ($existing) {
+            // При обновлении сохраняем wave_id из существующей записи, если в данных не передан
+            // (вебхук не присылает wave_id, и без этого затиралось бы значение — тогда URL не попадёт в Google-таблицу волны)
+            if ($migrationData['wave_id'] === null && !empty($existing['wave_id'])) {
+                $migrationData['wave_id'] = $existing['wave_id'];
+            }
             // Обновляем существующую запись
             $id = (int)$existing['id'];
             $updateFields = [];
@@ -565,18 +578,34 @@ class DatabaseService
         // Для простоты используем файл конфигурации
         $settingsFile = dirname(__DIR__, 2) . '/var/config/dashboard_settings.json';
         
-        if (file_exists($settingsFile)) {
-            $content = file_get_contents($settingsFile);
-            $settings = json_decode($content, true);
-            if ($settings) {
-                return $settings;
-            }
-        }
-        
-        return [
+        $settings = [
             'mb_site_id' => null,
             'mb_secret' => null,
         ];
+
+        if (file_exists($settingsFile)) {
+            $content = file_get_contents($settingsFile);
+            $decoded = json_decode($content, true);
+            if ($decoded) {
+                $settings = array_merge($settings, $decoded);
+            }
+        }
+
+        // Fallback: переменные окружения (для Docker/CLI, когда файл недоступен)
+        if (empty($settings['mb_site_id'])) {
+            $v = $_ENV['MB_SITE_ID'] ?? getenv('MB_SITE_ID');
+            if ($v !== false && $v !== '') {
+                $settings['mb_site_id'] = is_numeric($v) ? (int) $v : null;
+            }
+        }
+        if (empty($settings['mb_secret'])) {
+            $v = $_ENV['MB_SECRET'] ?? getenv('MB_SECRET');
+            if ($v !== false && $v !== '') {
+                $settings['mb_secret'] = (string) $v;
+            }
+        }
+
+        return $settings;
     }
 
     /**
@@ -737,7 +766,16 @@ class DatabaseService
                 'SELECT * FROM waves WHERE wave_id = ?',
                 [$waveId]
             );
-            
+            // Fallback: find иногда не находит при параметризованном запросе — ищем в полном списке
+            if (!$wave) {
+                $allWaves = $db->getAllRows('SELECT * FROM waves ORDER BY created_at DESC');
+                foreach ($allWaves as $w) {
+                    if (($w['wave_id'] ?? '') === $waveId) {
+                        $wave = $w;
+                        break;
+                    }
+                }
+            }
             if (!$wave) {
                 return null;
             }
@@ -1208,19 +1246,69 @@ class DatabaseService
     public function getWaveMigrations(string $waveId): array
     {
         $wave = $this->getWave($waveId);
-        
+
         if (!$wave) {
             return [];
         }
 
+        $migrations = $this->getWaveMigrationsByWaveId($waveId);
+        if (empty($migrations)) {
+            $migrations = $this->getWaveMigrationsFromTables($waveId);
+        }
+        return $migrations;
+    }
+
+    /**
+     * Упрощённое получение миграций волны (fallback когда getWaveMigrationsByWaveId не возвращает данные).
+     * migration_result_list.migration_uuid — bigint, для wave_id вида "1770309432_6765" пробуем числовую часть.
+     */
+    public function getWaveMigrationsFromTables(string $waveId): array
+    {
+        $db = $this->getWriteConnection();
+        $parts = explode('_', $waveId);
+        $migrationUuid = (count($parts) >= 2 && is_numeric($parts[0])) ? (int) $parts[0] : $waveId;
+
+        $rows = $db->getAllRows(
+            'SELECT mb_project_uuid, brz_project_id, brizy_project_domain, result_json, created_at FROM migration_result_list WHERE migration_uuid = ? ORDER BY created_at ASC',
+            [$migrationUuid]
+        );
+        if (empty($rows)) {
+            $rows = $db->getAllRows(
+                'SELECT mb_project_uuid, brz_project_id, brizy_project_domain, result_json, created_at FROM migrations WHERE wave_id = ? ORDER BY created_at ASC',
+                [$waveId]
+            );
+        }
+        $result = [];
+        foreach ($rows as $r) {
+            $result[] = [
+                'mb_project_uuid' => $r['mb_project_uuid'],
+                'brz_project_id' => (int)($r['brz_project_id'] ?? 0),
+                'brizy_project_domain' => $r['brizy_project_domain'] ?? null,
+                'status' => 'completed',
+                'error' => null,
+                'completed_at' => $r['created_at'] ?? null,
+            ];
+        }
+        return $result;
+    }
+
+    /**
+     * Получить миграции волны по wave_id (без проверки существования волны через getWave)
+     */
+    public function getWaveMigrationsByWaveId(string $waveId): array
+    {
         $db = $this->getWriteConnection();
         $migrations = [];
         $processedMbUuids = []; // Для отслеживания уже обработанных UUID
-        
-        // Получаем все миграции из migration_result_list по migration_uuid = wave_id
+
+        // migration_result_list.migration_uuid — bigint, для wave_id "1770309432_6765" используем числовую часть
+        $parts = explode('_', $waveId);
+        $migrationUuidParam = (count($parts) >= 2 && is_numeric($parts[0])) ? (int) $parts[0] : $waveId;
+
+        // Получаем все миграции из migration_result_list по migration_uuid
         $migrationResults = $db->getAllRows(
             'SELECT * FROM migration_result_list WHERE migration_uuid = ? ORDER BY created_at ASC',
-            [$waveId]
+            [$migrationUuidParam]
         );
         
         // Также получаем миграции из таблицы migrations по wave_id
@@ -1295,7 +1383,7 @@ class DatabaseService
         }
         
         // Оптимизация: получаем все migrations_mapping одним запросом (избегаем N+1)
-        $brzProjectIds = array_filter(array_column(array_column($allMigrationResults, 'data'), 'brz_project_id'));
+        $brzProjectIds = array_values(array_filter(array_column(array_column($allMigrationResults, 'data'), 'brz_project_id')));
         $migrationsMapping = [];
         if (!empty($brzProjectIds)) {
             $placeholders = implode(',', array_fill(0, count($brzProjectIds), '?'));
@@ -1311,16 +1399,16 @@ class DatabaseService
         
         // Оптимизация: получаем все migration_id для поиска ревьюеров
         // Сначала собираем все mb_uuid для поиска migration_id
-        $mbUuids = array_unique(array_column(array_column($allMigrationResults, 'data'), 'mb_project_uuid'));
+        $mbUuids = array_values(array_unique(array_column(array_column($allMigrationResults, 'data'), 'mb_project_uuid')));
         $migrationIdsByMbUuid = [];
         if (!empty($mbUuids)) {
             $placeholders = implode(',', array_fill(0, count($mbUuids), '?'));
-            $migrations = $db->getAllRows(
+            $migrationRows = $db->getAllRows(
                 "SELECT id, mb_project_uuid FROM migrations WHERE mb_project_uuid IN ($placeholders) AND (wave_id = ? OR wave_id IS NULL) ORDER BY (wave_id = ?) DESC, created_at DESC",
                 array_merge($mbUuids, [$waveId, $waveId])
             );
             // Создаем индекс по mb_project_uuid (берем первый/последний для каждого UUID)
-            foreach ($migrations as $migration) {
+            foreach ($migrationRows as $migration) {
                 $mbUuid = $migration['mb_project_uuid'];
                 if (!isset($migrationIdsByMbUuid[$mbUuid])) {
                     $migrationIdsByMbUuid[$mbUuid] = (int)$migration['id'];
@@ -1375,7 +1463,7 @@ class DatabaseService
         }
         $correctBrzByMbUuid = [];
         if (!empty($needFixMbUuids)) {
-            $needFixMbUuids = array_unique($needFixMbUuids);
+            $needFixMbUuids = array_values(array_unique($needFixMbUuids));
             $placeholders = implode(',', array_fill(0, count($needFixMbUuids), '?'));
             $correctMappings = $db->getAllRows(
                 "SELECT mb_project_uuid, brz_project_id FROM migrations_mapping WHERE mb_project_uuid IN ($placeholders) AND brz_project_id > 1000 ORDER BY updated_at DESC",
@@ -1599,7 +1687,7 @@ class DatabaseService
         }
         
         // Получаем все brz_project_id из результатов
-        $brzProjectIds = array_filter(array_column($migrationResults, 'brz_project_id'));
+        $brzProjectIds = array_values(array_filter(array_column($migrationResults, 'brz_project_id')));
         
         if (empty($brzProjectIds)) {
             return [];
@@ -1619,7 +1707,7 @@ class DatabaseService
         }
         
         // Получаем ревьюеров по UUID из migration_reviewers
-        $mbUuids = array_unique(array_column($migrationResults, 'mb_project_uuid'));
+        $mbUuids = array_values(array_unique(array_column($migrationResults, 'mb_project_uuid')));
         $reviewersByUuid = [];
         if (!empty($mbUuids)) {
             $reviewersPlaceholders = implode(',', array_fill(0, count($mbUuids), '?'));

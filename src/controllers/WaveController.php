@@ -169,10 +169,17 @@ class WaveController
             $details = $this->waveService->getWaveDetails($id);
 
             if (!$details) {
-                return new JsonResponse([
+                $response = [
                     'success' => false,
                     'error' => 'Волна не найдена'
-                ], 404);
+                ];
+                if (($_ENV['APP_DEBUG'] ?? '') === 'true') {
+                    $response['debug'] = [
+                        'wave_id' => $id,
+                        'hint' => 'Проверьте подключение к БД (MG_DB_HOST) и наличие волны в таблице waves',
+                    ];
+                }
+                return new JsonResponse($response, 404);
             }
 
             return new JsonResponse([
@@ -519,10 +526,17 @@ class WaveController
             ], 200);
 
         } catch (Exception $e) {
+            $msg = $e->getMessage();
+            $code = 500;
+            if (strpos($msg, 'mb_site_id и mb_secret') !== false || strpos($msg, 'Не найдено миграций') !== false) {
+                $code = 400;
+            } elseif (strpos($msg, 'Волна не найдена') !== false || strpos($msg, 'Workspace ID не найден') !== false) {
+                $code = 404;
+            }
             return new JsonResponse([
                 'success' => false,
-                'error' => $e->getMessage()
-            ], 500);
+                'error' => $msg
+            ], $code);
         }
     }
 

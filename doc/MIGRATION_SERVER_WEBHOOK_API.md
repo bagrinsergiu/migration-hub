@@ -10,6 +10,37 @@
 2. Вызвать веб-хук по завершению миграции (успешной или с ошибкой)
 3. Предоставить endpoint для опроса статуса миграции
 
+## 0. Взаимное рукопожатие и тест связи
+
+### Взаимное рукопожатие (рекомендуемый способ проверки)
+
+Дашборд дергает сервер миграции, получает его идентичность (сервис, server_id, IP), а сервер миграции в ответ на тот же запрос сам дергает дашборд. Если оба шага успешны — связь работает в обе стороны.
+
+- **Дашборд:** `GET /api/migration-server/handshake` (требует авторизации). Ответ содержит `migration_server` (service, server_id, client_ip), `handshake_with_dashboard: "ok"` или `"fail"`. При `ok` — рукопожатие прошло.
+- **Сервер миграции:** `GET /dashboard-handshake?dashboard_callback_url={url}` — возвращает идентичность и при переданном `dashboard_callback_url` вызывает дашборд (`POST {url}` с `{"source": "migration_server", "handshake": true}`), в ответ добавляет `handshake_with_dashboard: "ok"` или `"fail"`.
+
+Ожидаемое тело ответа сервера миграции на `GET /dashboard-handshake` (без параметра): `service: "migration-server"`, `server_id`, `timestamp`, `client_ip`. С параметром `dashboard_callback_url` — дополнительно `handshake_with_dashboard`, при ошибке — `handshake_error`.
+
+### Тест связи только к дашборду
+
+Чтобы убедиться, что сервер миграции достучится до дашборда (тот же хост, что в `webhook_url`), можно вызвать тестовый эндпоинт **без авторизации**.
+
+**URL:** `{DASHBOARD_BASE_URL}/api/webhooks/test-connection`
+
+- **GET** — проверка доступности дашборда. Ответ: `{"success": true, "service": "migration-dashboard", "message": "Dashboard is reachable", "timestamp": "..."}`.
+- **POST** — проверка с идентификацией. Тело, например: `{"source": "migration_server", "handshake": true}`. Ответ содержит `dashboard: "migration-dashboard"` и поле `your_payload` — обе стороны убеждаются, что связь с нужным сервисом есть.
+
+Пример с сервера миграции:
+
+```bash
+curl -s "http://dashboard-host:8088/api/webhooks/test-connection"
+curl -s -X POST "http://dashboard-host:8088/api/webhooks/test-connection" \
+  -H "Content-Type: application/json" \
+  -d '{"source": "migration_server", "handshake": true}'
+```
+
+Локальный тест из репозитория дашборда: `php src/scripts/test_webhook_connection.php [BASE_URL]`.
+
 ## 1. Параметры веб-хука при запуске миграции
 
 ### Запрос на запуск миграции

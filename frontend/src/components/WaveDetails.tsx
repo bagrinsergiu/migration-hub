@@ -42,7 +42,10 @@ export default function WaveDetails() {
         setError(response.error || 'Волна не найдена');
       }
     } catch (err: any) {
-      setError(err.message || 'Ошибка загрузки деталей');
+      setError(err?.response?.data?.error || err?.message || 'Ошибка загрузки деталей');
+      if (err?.response?.status === 404) {
+        navigate('/wave', { state: { waveNotFound: id }, replace: true });
+      }
     } finally {
       setLoading(false);
     }
@@ -53,22 +56,24 @@ export default function WaveDetails() {
     if (!id || !details) return;
     try {
       const status = details.wave.status;
-      const hasActiveMigrations = details.migrations.some(m => 
+      const hasActiveMigrations = details.migrations.some(m =>
         m.status === 'in_progress' || m.status === 'pending'
       );
-      
+
       // Обновляем если волна активна или есть активные миграции
       if (status !== 'in_progress' && status !== 'pending' && !hasActiveMigrations) {
         return;
       }
       setAutoRefreshing(true);
+      setError(null);
       const response = await api.getWaveDetails(id);
       if (response.success && response.data) {
         setDetails(response.data);
+      } else {
+        setError(response.error || 'Ошибка обновления');
       }
-      // Не логируем ошибки фонового refresh — они ожидаемы при недоступности бэкенда
     } catch {
-      // Игнорируем — фоновое обновление, данные остаются из кэша
+      setError('Ошибка обновления. Повторите позже.');
     } finally {
       setAutoRefreshing(false);
     }
@@ -81,19 +86,20 @@ export default function WaveDetails() {
   }, [id]);
 
   useEffect(() => {
+    if (!id || error) return;
     // Обновляем статус каждые 5 секунд, но в фоне
     // Если есть активные миграции (in_progress или pending), обновляем чаще
-    const hasActiveMigrations = details?.migrations.some(m => 
+    const hasActiveMigrations = details?.migrations.some(m =>
       m.status === 'in_progress' || m.status === 'pending'
     ) || false;
-    
+
     const intervalTime = hasActiveMigrations ? 3000 : 5000; // 3 сек для активных, 5 сек для остальных
-    
+
     const interval = setInterval(() => {
       refreshDetails();
     }, intervalTime);
     return () => clearInterval(interval);
-  }, [details, id]);
+  }, [details, id, error]);
 
   const handleRestartMigration = async (mbUuid: string, withQualityAnalysis: boolean) => {
     if (!id) return;
@@ -533,7 +539,8 @@ export default function WaveDetails() {
                         setError(response.error || 'Ошибка перезапуска');
                       }
                     } catch (err: any) {
-                      setError(err.message || 'Ошибка перезапуска');
+                      const serverError = err?.response?.data?.error;
+                      setError(serverError || err?.message || 'Ошибка перезапуска');
                     } finally {
                       setRestartingAll(false);
                     }
@@ -565,7 +572,8 @@ export default function WaveDetails() {
                           setError(response.error || 'Ошибка перезапуска');
                         }
                       } catch (err: any) {
-                        setError(err.message || 'Ошибка перезапуска');
+                        const serverError = err?.response?.data?.error;
+                        setError(serverError || err?.message || 'Ошибка перезапуска');
                       } finally {
                         setRestartingAll(false);
                       }
@@ -684,7 +692,7 @@ export default function WaveDetails() {
                               {migration.error}
                             </div>
                           )}
-                          {migration.status !== 'pending' && migration.result_data?.warnings && migration.result_data.warnings.length > 0 && (
+                          {migration.status !== 'pending' && migration.status !== 'in_progress' && migration.result_data?.warnings && migration.result_data.warnings.length > 0 && (
                             <div className="warning-text" style={{ fontSize: '0.75rem', marginTop: '0.25rem', color: '#856404' }}>
                               ⚠ {migration.result_data.warnings.length} предупреждений
                             </div>
