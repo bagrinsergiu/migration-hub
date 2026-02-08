@@ -39,6 +39,7 @@ export default function MigrationDetails() {
   const [removingCache, setRemovingCache] = useState(false);
   const [resettingStatus, setResettingStatus] = useState(false);
   const [hardResetting, setHardResetting] = useState(false);
+  const [settingCompleted, setSettingCompleted] = useState(false);
   const [hasRefreshedAfterCompletion, setHasRefreshedAfterCompletion] = useState(false);
   const [showLogs, setShowLogs] = useState(false);
   const [logs, setLogs] = useState<string | null>(null);
@@ -112,7 +113,7 @@ export default function MigrationDetails() {
         setPagesList(response.data);
         // Обновляем статусы миграции на основе processInfo и details
         if (processInfo?.process?.running) {
-          // Если есть информация о текущей странице в lock-файле
+          // Если есть информация о текущей странице (с сервера миграции)
           const currentChangesJson = safeParseChangesJson(details?.mapping?.changes_json);
           const currentPageSlug = processInfo.process.current_page_slug || 
                                  (details?.result as any)?.mb_page_slug ||
@@ -272,21 +273,21 @@ export default function MigrationDetails() {
 
   const handleRemoveLock = async () => {
     if (!id) return;
-    if (!confirm('Вы уверены, что хотите удалить lock-файл? Это позволит перезапустить миграцию.')) {
+    if (!confirm('Снять блокировку? Блокировка управляется сервером миграции; для повторного запуска можно также использовать «Сброс статуса» или «Перезапуск».')) {
       return;
     }
     try {
       setRemovingLock(true);
       const response = await api.removeMigrationLock(parseInt(id));
       if (response.success) {
-        alert(response.data?.message || 'Lock-файл удален');
+        alert(response.data?.message || 'Готово');
         await loadProcessInfo();
         await loadDetails();
       } else {
-        alert(response.error || 'Ошибка при удалении lock-файла');
+        alert(response.error || 'Ошибка при снятии блокировки');
       }
     } catch (err: any) {
-      alert(err.message || 'Ошибка при удалении lock-файла');
+      alert(err.message || 'Ошибка при снятии блокировки');
     } finally {
       setRemovingLock(false);
     }
@@ -338,7 +339,7 @@ export default function MigrationDetails() {
 
   const handleHardReset = async () => {
     if (!id) return;
-    if (!confirm('Вы уверены, что хотите выполнить HARD RESET?\n\nЭто действие:\n- Удалит lock-файл\n- Удалит cache-файл\n- Завершит процесс миграции (если запущен)\n- Сбросит статус в БД на "pending"\n\nПосле этого миграцию можно будет перезапустить.')) {
+    if (!confirm('Вы уверены, что хотите выполнить HARD RESET?\n\nЭто действие:\n- Удалит cache-файл\n- Сбросит статус в БД на "pending"\n\nПроцесс и блокировка управляются сервером миграции. После сброса миграцию можно будет перезапустить.')) {
       return;
     }
     try {
@@ -364,30 +365,62 @@ export default function MigrationDetails() {
     }
   };
 
+  const handleSetCompleted = async () => {
+    if (!id) return;
+    if (!confirm('Миграция действительно завершилась успешно? Установить статус «Завершена» и обновить данные в таблице?')) {
+      return;
+    }
+    try {
+      setSettingCompleted(true);
+      const response = await api.setMigrationCompleted(parseInt(id), details?.brizy_project_domain);
+      if (response.success) {
+        alert(response.data?.message || 'Статус установлен: Завершена');
+        await loadDetails();
+      } else {
+        alert(response.error || 'Ошибка при установке статуса');
+      }
+    } catch (err: any) {
+      alert(err.message || 'Ошибка при установке статуса');
+    } finally {
+      setSettingCompleted(false);
+    }
+  };
+
+  // Реф для отслеживания перехода "миграция активна" -> "не активна" (чтобы подхватить результат вебхука)
+  const hadActiveMigrationRef = useRef(false);
+
   useEffect(() => {
     // Обновляем статус каждые 3 секунды если миграция в процессе
-    // Частое обновление для отслеживания текущего этапа миграции
-    const hasActiveMigration = details?.status === 'in_progress' || 
+    const hasActiveMigration = details?.status === 'in_progress' ||
                                (processInfo?.lock_file_exists && processInfo?.process?.running) ||
                                Object.values(pageMigrationStatus).some(status => status === 'in_progress');
-    
+
     if (hasActiveMigration) {
-      // Сбрасываем флаг при начале новой миграции
+      hadActiveMigrationRef.current = true;
       setHasRefreshedAfterCompletion(false);
       const interval = setInterval(() => {
-        refreshDetails(); // Обновляет только данные, без показа загрузки
-        loadProcessInfo(false); // Обновляем в фоне без показа загрузки
-        // Обновляем список страниц, чтобы обновить статусы
+        refreshDetails();
+        loadProcessInfo(false);
         loadPagesList();
-      }, 3000); // Обновление каждые 3 секунды
+      }, 3000);
       return () => clearInterval(interval);
     }
-    
-    // Обновляем данные после завершения миграции (успешной или нет)
-    // Обновляем только один раз после завершения
+
+    // Только что перестали считать миграцию активной — делаем 1–2 доопроса, чтобы подхватить обновление по вебхуку
+    if (hadActiveMigrationRef.current) {
+      hadActiveMigrationRef.current = false;
+      refreshDetails();
+      loadProcessInfo(false);
+      const t = setTimeout(() => {
+        refreshDetails();
+        loadProcessInfo(false);
+      }, 2500);
+      return () => clearTimeout(t);
+    }
+
+    // Обновляем данные после завершения миграции (уже получили terminal status)
     if ((details?.status === 'success' || details?.status === 'error' || details?.status === 'completed') && !hasRefreshedAfterCompletion) {
       setHasRefreshedAfterCompletion(true);
-      // Обновляем данные после завершения миграции
       refreshDetails();
       loadProcessInfo(false);
     }
@@ -828,7 +861,27 @@ export default function MigrationDetails() {
                       <li>При запуске миграции веб-хук автоматически регистрируется на сервере миграции</li>
                       <li>Сервер миграции вызывает веб-хук по завершении миграции (успешной или с ошибкой)</li>
                       <li>Дашборд также периодически опрашивает статус миграции (каждые 3 секунды)</li>
-                      <li>Если веб-хук не получен, статус обновляется через опрос</li>
+                      <li>Если веб-хук не получен, статус обновляется только через опрос API</li>
+                    </ul>
+                  </div>
+                  
+                  <div style={{ 
+                    marginTop: '1rem', 
+                    padding: '0.75rem', 
+                    backgroundColor: '#fff3cd', 
+                    border: '1px solid #ffc107', 
+                    borderRadius: '4px', 
+                    fontSize: '0.875rem', 
+                    color: '#856404' 
+                  }}>
+                    <strong>Если вебхуки не приходят</strong>
+                    <p style={{ margin: '0.5rem 0 0 0' }}>
+                      Сервер миграции должен иметь возможность <strong>достучаться до URL вебхука</strong> (см. выше) со своей машины или контейнера. Иначе вызов по завершении миграции не дойдёт до дашборда.
+                    </p>
+                    <ul style={{ margin: '0.5rem 0 0 1.25rem', paddingLeft: 0 }}>
+                      <li>В <code>.env</code> дашборда задайте <code>DASHBOARD_BASE_URL</code> — это адрес, по которому <strong>сервер миграции</strong> обращается к дашборду (не localhost, если сервер в другом контейнере/хосте).</li>
+                      <li>Проверка с машины сервера миграции: <code>{`curl -X POST "${webhookInfo.webhook_url}" -H "Content-Type: application/json" -d '{"status":"test"}'`}</code> — ответ 200 означает, что URL достижим.</li>
+                      <li>Docker: если дашборд и сервер в одной сети — используйте имя сервиса, например <code>DASHBOARD_BASE_URL=http://dashboard:80</code>; если в разных — с хоста сервера миграции нужен IP/хост дашборда (см. doc/ENV_VARIABLES.md).</li>
                     </ul>
                   </div>
                   
@@ -867,11 +920,21 @@ export default function MigrationDetails() {
                 >
                   {resettingStatus ? 'Сброс...' : '🔄 Сбросить статус'}
                 </button>
+                {details.status === 'error' && (
+                  <button
+                    onClick={handleSetCompleted}
+                    className="btn btn-success"
+                    disabled={settingCompleted}
+                    title="Если миграция на самом деле завершилась успешно — установить статус «Завершена»"
+                  >
+                    {settingCompleted ? 'Обновление...' : '✓ Пометить как завершённую'}
+                  </button>
+                )}
                 <button
                   onClick={handleHardReset}
                   className="btn btn-danger"
                   disabled={hardResetting}
-                  title="Hard Reset: удалить lock-файл, cache-файл, завершить процесс и сбросить статус"
+                  title="Hard Reset: удалить cache-файл и сбросить статус в БД"
                 >
                   {hardResetting ? 'Выполнение...' : '💥 Hard Reset'}
                 </button>
@@ -879,7 +942,8 @@ export default function MigrationDetails() {
               <div className="form-help" style={{ marginTop: '0.5rem', fontSize: '0.875rem', color: '#6c757d' }}>
                 <p>• <strong>Удалить кэш</strong> - удаляет промежуточные данные кэша миграции</p>
                 <p>• <strong>Сбросить статус</strong> - устанавливает статус на "pending", позволяя перезапустить миграцию</p>
-                <p>• <strong>Hard Reset</strong> - полный сброс: удаляет lock-файл, cache-файл, завершает процесс и сбрасывает статус (одна кнопка для полной очистки)</p>
+                <p>• <strong>Пометить как завершённую</strong> - если миграция реально завершилась успешно, но в системе отображается ошибка (например, из-за перезапуска)</p>
+                <p>• <strong>Hard Reset</strong> - сброс: удаляет cache-файл и сбрасывает статус в БД (процесс и блокировка на сервере миграции)</p>
               </div>
             </div>
           </div>
@@ -900,26 +964,17 @@ export default function MigrationDetails() {
               {/* Блок уведомлений и информации о процессе - сразу под заголовком */}
               {!loadingProcessInfo && processInfo && (
                 <>
-                  {/* Уведомление о статусе lock-файла — не показываем при опросе API сервера */}
-                  {processInfo.source !== 'migration_server_api' && !processInfo.lock_file_exists && !processInfo.process?.running && 
-                   (!processInfo.process?.message || !processInfo.process.message.includes('Lock-файл не найден')) && (
-                    <div className="alert alert-info" style={{ marginBottom: '1rem', padding: '0.75rem', fontSize: '0.875rem', borderRadius: '4px', backgroundColor: '#d1ecf1', border: '1px solid #bee5eb', color: '#0c5460' }}>
-                      ℹ️ Lock-файл не найден, процесс не запущен
+                  {/* Сервер миграции недоступен */}
+                  {processInfo.success === false && (processInfo.error || processInfo.process?.message) && (
+                    <div className="alert alert-warning" style={{ marginBottom: '1rem', padding: '0.75rem', fontSize: '0.875rem', borderRadius: '4px', backgroundColor: '#fff3cd', border: '1px solid #ffc107', color: '#856404' }}>
+                      ⚠️ {processInfo.error || processInfo.process?.message}
                     </div>
                   )}
                   
-                  {/* Информация о том, как был обнаружен процесс - показываем только если нет process.message или оно не содержит эту информацию */}
-                  {processInfo.process?.running && processInfo.process?.detected_by && 
-                   (!processInfo.process?.message || !processInfo.process.message.includes('найден') && !processInfo.process.message.includes('определен')) && (
+                  {/* Источник: API сервера миграции */}
+                  {processInfo.source === 'migration_server_api' && processInfo.success && processInfo.process?.running && (
                     <div className="alert alert-info" style={{ marginBottom: '1rem', padding: '0.75rem', fontSize: '0.875rem', borderRadius: '4px', backgroundColor: '#d1ecf1', border: '1px solid #bee5eb', color: '#0c5460' }}>
-                      ℹ️ {processInfo.process.detected_by === 'migration_server_api' ? 'Статус с API сервера миграции' :
-                          processInfo.process.detected_by === 'lock_file_pid' ? 'Процесс найден по PID из lock-файла' :
-                          processInfo.process.detected_by === 'lock_file_timestamp_and_db_status' ? 'Процесс определен по времени файла и статусу БД' :
-                          processInfo.process.detected_by === 'db_status' ? 'Процесс определен по статусу БД' :
-                          processInfo.process.detected_by === 'lsof' ? 'Процесс найден через lsof' :
-                          processInfo.process.detected_by === 'fuser' ? 'Процесс найден через fuser' :
-                          processInfo.process.detected_by === 'ps_grep' ? 'Процесс найден через ps' :
-                          'Процесс найден'}
+                      ℹ️ Статус с API сервера миграции (GET /migration-status)
                     </div>
                   )}
                   
@@ -932,23 +987,10 @@ export default function MigrationDetails() {
                     </div>
                   )}
                   
-                  {/* Уведомление о lock-файле без процесса */}
-                  {processInfo.lock_file_exists && !processInfo.process?.running && !processInfo.status_updated && 
-                   (!processInfo.process?.message || !processInfo.process.message.includes('Lock-файл')) && (
-                    <div className="alert alert-warning" style={{ marginBottom: '1rem', padding: '0.75rem', fontSize: '0.875rem', borderRadius: '4px', backgroundColor: '#fff3cd', border: '1px solid #ffc107', color: '#856404' }}>
-                      ⚠️ Lock-файл существует, но процесс не найден.
-                      {processInfo.process?.lock_file_age !== undefined && processInfo.process.lock_file_age > 600 && (
-                        <span> Lock-файл не обновлялся более {Math.floor(processInfo.process.lock_file_age / 60)} минут.</span>
-                      )}
-                      {' '}Возможно, процесс был прерван. Рекомендуется удалить lock-файл, чтобы разрешить повторный запуск миграции.
-                    </div>
-                  )}
-                  
-                  {/* Уведомление о процессе без PID */}
-                  {processInfo.process?.running && !processInfo.process?.pid && 
-                   (!processInfo.process?.message || !processInfo.process.message.includes('PID') && !processInfo.process.message.includes('синхронно')) && (
+                  {/* Уведомление о процессе без PID (миграция на сервере) */}
+                  {processInfo.process?.running && !processInfo.process?.pid && processInfo.source === 'migration_server_api' && (
                     <div className="alert alert-info" style={{ marginBottom: '1rem', padding: '0.75rem', fontSize: '0.875rem', borderRadius: '4px', backgroundColor: '#d1ecf1', border: '1px solid #bee5eb', color: '#0c5460' }}>
-                      ℹ️ Процесс миграции активен (определен по статусу в БД и времени модификации lock-файла). PID процесса недоступен, возможно миграция выполняется синхронно через веб-сервер.
+                      ℹ️ Миграция выполняется на сервере миграции. PID процесса на дашборде не отображается.
                     </div>
                   )}
                   
@@ -975,12 +1017,12 @@ export default function MigrationDetails() {
                         </div>
                       )}
                       <div className="info-item">
-                        <span className="info-label">Lock-файл:</span>
+                        <span className="info-label">Статус на сервере:</span>
                         <span className="info-value">
                           {processInfo.lock_file_exists ? (
-                            <span style={{ color: '#dc3545' }}>● Существует</span>
+                            <span style={{ color: '#fd7e14' }}>● В процессе</span>
                           ) : (
-                            <span style={{ color: '#198754' }}>● Не используется</span>
+                            <span style={{ color: '#198754' }}>● Не запущена / завершена</span>
                           )}
                         </span>
                       </div>
@@ -1061,14 +1103,6 @@ export default function MigrationDetails() {
                               )}
                             </div>
                           )}
-                          {processInfo.process.lock_file_age !== undefined && (
-                            <div className="info-item">
-                              <span className="info-label">Возраст lock-файла:</span>
-                              <span className="info-value">
-                                {Math.floor(processInfo.process.lock_file_age / 60)} мин. {processInfo.process.lock_file_age % 60} сек.
-                              </span>
-                            </div>
-                          )}
                           {processInfo.process_details && (
                             <>
                               <div className="info-item">
@@ -1125,7 +1159,7 @@ export default function MigrationDetails() {
                   )}
                   {processInfo?.process?.running && !processInfo?.process?.pid && (
                     <div className="alert alert-info" style={{ padding: '0.75rem', fontSize: '0.875rem' }}>
-                      ⚠️ PID процесса недоступен. Для завершения процесса используйте кнопку "Сбросить статус" или удалите lock-файл.
+                      ⚠️ PID процесса на дашборде недоступен (миграция на сервере). Для повторного запуска используйте «Сбросить статус» или «Перезапуск».
                     </div>
                   )}
                   {(processInfo?.lock_file_exists || details.status === 'in_progress') && (
@@ -1133,9 +1167,9 @@ export default function MigrationDetails() {
                       onClick={handleRemoveLock}
                       className="btn btn-secondary"
                       disabled={removingLock}
-                      title="Удалить lock-файл, чтобы разрешить повторный запуск миграции"
+                      title="Снять блокировку (управляется сервером миграции). Для перезапуска также: Сброс статуса или Перезапуск"
                     >
-                      {removingLock ? 'Удаление...' : 'Удалить lock-файл'}
+                      {removingLock ? 'Выполняется...' : 'Снять блокировку'}
                     </button>
                   )}
                   <button

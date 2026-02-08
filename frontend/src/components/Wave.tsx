@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useLocation } from 'react-router-dom';
 import { api, Wave as WaveType } from '../api/client';
 import { getStatusConfig } from '../utils/status';
 import { formatDate } from '../utils/format';
@@ -8,6 +8,8 @@ import './Wave.css';
 import './WaveDetails.css';
 
 export default function Wave() {
+  const location = useLocation();
+  const waveNotFoundId = (location.state as { waveNotFound?: string } | null)?.waveNotFound;
   const [waves, setWaves] = useState<WaveType[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -52,13 +54,11 @@ export default function Wave() {
       const filters = statusFilter ? { status: statusFilter } : undefined;
       const response = await api.getWaves(filters);
       if (response.success && response.data) {
-        // Обновляем список волн, чтобы получить актуальные статусы и прогресс
         setWaves(response.data);
-      } else if (response.error) {
-        console.error('Error refreshing waves:', response.error);
       }
-    } catch (err: any) {
-      console.error('Error refreshing waves:', err);
+      // При сетевых сбоях (ERR_NETWORK_CHANGED, 502, 500) не логируем — список остаётся прежним
+    } catch (_err) {
+      // Тихо игнорируем ошибки фонового обновления
     } finally {
       setAutoRefreshing(false);
     }
@@ -204,6 +204,11 @@ export default function Wave() {
 
   return (
     <div className="wave-page">
+      {waveNotFoundId && (
+        <div className="wave-not-found-banner" role="alert">
+          Волна <strong>{waveNotFoundId}</strong> не найдена.
+        </div>
+      )}
       <div className="page-header">
         <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
           <h2>Волны миграций</h2>

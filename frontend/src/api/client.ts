@@ -131,6 +131,19 @@ export const api = {
     return response.data;
   },
 
+  // Взаимное рукопожатие: дашборд опрашивает сервер миграции, сервер опрашивает дашборд
+  async getMigrationServerHandshake(): Promise<ApiResponse<{
+    success: boolean;
+    message?: string;
+    migration_server?: { service: string; server_id: string; client_ip?: string; timestamp?: string };
+    handshake_with_dashboard: 'ok' | 'fail';
+    handshake_error?: string;
+    http_code?: number;
+  }>> {
+    const response = await apiClient.get('/migration-server/handshake');
+    return response.data;
+  },
+
   // Auth
   async login(username: string, password: string): Promise<ApiResponse<{ session_id: string; user: any }>> {
     try {
@@ -279,6 +292,13 @@ export const api = {
 
   async resetMigrationStatus(id: number): Promise<ApiResponse<any>> {
     const response = await apiClient.post(`/migrations/${id}/reset-status`);
+    return response.data;
+  },
+
+  async setMigrationCompleted(id: number, brizyProjectDomain?: string): Promise<ApiResponse<any>> {
+    const response = await apiClient.post(`/migrations/${id}/set-completed`, {
+      brizy_project_domain: brizyProjectDomain ?? undefined,
+    });
     return response.data;
   },
 

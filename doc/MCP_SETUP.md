@@ -1,5 +1,11 @@
 # Инструкция по настройке MCP серверов для migration-hub
 
+## Переносная работа (внешний диск)
+
+Проект настроен для работы с внешнего диска на разных машинах (рабочая/домашняя). MCP конфигурация хранится в самом проекте (`.cursor/mcp.json`), поэтому при открытии папки с диска всё подхватывается автоматически.
+
+**Подробная инструкция:** [PORTABLE_SETUP.md](./PORTABLE_SETUP.md)
+
 ## Настроенные серверы
 
 ### 1. База миграций (MySQL) - `dbhub-migration`
@@ -54,86 +60,48 @@
 
 ## Настройка клиентской базы данных
 
-Для работы с клиентской базой данных необходимо указать параметры подключения в файле настроек Cursor:
+Скрипт `.cursor-mcp-dbhub-client.sh` загружает параметры подключения из `.env` и `.env.prod.local` в корне проекта.
 
-**Файл**: `~/.config/Cursor/User/settings.json` или `~/.cursor/mcp.json`
+**Рекомендуемый способ (переносная работа):**
 
-Найдите секцию `dbhub-client-readonly` и замените значения в `env`:
+1. Скопируйте шаблон: `cp .env.example .env`
+2. Заполните в `.env` переменные `MB_DB_*`:
+   ```env
+   MB_DB_HOST=ec2-54-226-97-109.compute-1.amazonaws.com
+   MB_DB_USER=ваш_пользователь
+   MB_DB_PASSWORD=ваш_пароль
+   MB_DB_NAME=имя_вашей_базы_данных
+   MB_DB_PORT=5432
+   # MB_DB_TYPE определяется по порту (5432→postgres, 3306→mysql)
+   ```
 
-**Для PostgreSQL:**
-```json
-"dbhub-client-readonly": {
-    "command": "/media/worker/STORE/P_DEV/migration-hub/.cursor-mcp-dbhub-client.sh",
-    "env": {
-        "MB_DB_USER": "ваш_пользователь",
-        "MB_DB_PASSWORD": "ваш_пароль",
-        "MB_DB_NAME": "имя_вашей_базы_данных",
-        "MB_DB_PORT": "5432",
-        "MB_DB_TYPE": "postgres"
-    }
-}
-```
+Тип БД определяется по порту автоматически: `3306` → MySQL, `5432` → PostgreSQL.
 
-**Для MySQL:**
-```json
-"dbhub-client-readonly": {
-    "command": "/media/worker/STORE/P_DEV/migration-hub/.cursor-mcp-dbhub-client.sh",
-    "env": {
-        "MB_DB_USER": "ваш_пользователь",
-        "MB_DB_PASSWORD": "ваш_пароль",
-        "MB_DB_NAME": "имя_вашей_базы_данных",
-        "MB_DB_PORT": "3306",
-        "MB_DB_TYPE": "mysql"
-    }
-}
-```
-
-**Примечание:** Если не указать `MB_DB_TYPE`, тип базы данных будет определен автоматически по порту:
-- Порт `3306` → MySQL
-- Порт `5432` → PostgreSQL
-
-### Альтернативный способ
-
-Вы также можете отредактировать скрипт напрямую или использовать переменные окружения из `.env` файла:
-
-**Файл**: `/media/worker/STORE/P_DEV/migration-hub/.cursor-mcp-dbhub-client.sh`
-
-Скрипт автоматически загружает переменные из `.env` и `.env.prod.local` файлов в корне проекта.
-
-**Важно:** Скрипт автоматически определяет тип базы данных по порту, но вы можете явно указать `MB_DB_TYPE` для большей надежности.
+**Альтернатива:** задать `MB_DB_*` через `env` в `.cursor/mcp.json` (секция `dbhub-client-readonly`), но для переносной работы удобнее `.env` — файл остаётся на диске вместе с проектом.
 
 ## Конфигурация MCP
 
-Все MCP серверы настроены в файле: `~/.cursor/mcp.json`
+MCP серверы настроены на **уровне проекта** в файле `.cursor/mcp.json`. Это позволяет работать с внешнего диска на разных машинах без ручной правки путей.
+
+- **Project-level:** `.cursor/mcp.json` в корне проекта — используется при открытии этой папки в Cursor.
+- **Глобальный:** `~/.cursor/mcp.json` — для других проектов; при открытии migration-hub project-level конфиг имеет приоритет.
+
+Текущая конфигурация (`.cursor/mcp.json`) использует `${workspaceFolder}` — Cursor подставляет путь к проекту автоматически:
 
 ```json
 {
   "mcpServers": {
-    "playwright": {
-      "command": "npx",
-      "args": ["-y", "@playwright/mcp"]
-    },
-    "dbhub-migration": {
-      "command": "/media/worker/STORE/P_DEV/migration-hub/.cursor-mcp-dbhub-migration.sh"
-    },
-    "dbhub-client-readonly": {
-      "command": "/media/worker/STORE/P_DEV/migration-hub/.cursor-mcp-dbhub-client.sh"
-    },
-    "serena": {
-      "command": "/media/worker/STORE/P_DEV/migration-hub/.cursor-mcp-serena.sh"
-    },
-    "gitmcp-migration-hub": {
-      "url": "https://gitmcp.io/bagrinsergiu/migration-hub"
-    },
-    "ripgrep": {
-      "command": "npx",
-      "args": ["-y", "mcp-ripgrep@latest"]
-    }
+    "playwright": { "command": "npx", "args": ["-y", "@playwright/mcp"] },
+    "dbhub-migration": { "command": "${workspaceFolder}/.cursor-mcp-dbhub-migration.sh" },
+    "dbhub-client-readonly": { "command": "${workspaceFolder}/.cursor-mcp-dbhub-client.sh" },
+    "serena": { "command": "${workspaceFolder}/.cursor-mcp-serena.sh" },
+    "gitmcp-migration-hub": { "url": "https://gitmcp.io/bagrinsergiu/migration-hub" },
+    "ripgrep": { "command": "npx", "args": ["-y", "mcp-ripgrep@latest"] }
   }
 }
 ```
 
-**Рекомендуется** использовать скрипт для Serena: он передаёт в сервер явный путь к проекту (`--project`), поэтому проект определяется корректно независимо от текущей директории Cursor. Альтернатива — запуск через `uvx` с `--project-from-cwd` (тогда Cursor должен быть открыт в корне репозитория).
+Скрипт Serena передаёт в сервер явный путь к проекту (`--project`), поэтому проект определяется корректно независимо от текущей директории Cursor.
 
 ## Настройка работы Serena
 
@@ -150,11 +118,9 @@
 - Вычисляет корень проекта по своему расположению и передаёт его в Serena как `--project ...`.
 - Гарантирует, что активен именно этот репозиторий, даже если Cursor запущен из другой папки.
 
-В `~/.cursor/mcp.json` для `serena` укажите:
+В project-level `.cursor/mcp.json` уже указано:
 ```json
-"serena": {
-  "command": "/media/worker/STORE/P_DEV/migration-hub/.cursor-mcp-serena.sh"
-}
+"serena": { "command": "${workspaceFolder}/.cursor-mcp-serena.sh" }
 ```
 
 ### Правило для агента (`.cursor/rules/serena.mdc`)
@@ -195,21 +161,20 @@
    - Логи доступны в: `~/.config/Cursor/logs/*/exthost/anysphere.cursor-mcp/`
    - Ищите ошибки, связанные с serena
 
-3. **Попробуйте запустить вручную** (скрипт с явным путём):
+3. **Попробуйте запустить вручную** (из корня проекта):
    ```bash
-   /media/worker/STORE/P_DEV/migration-hub/.cursor-mcp-serena.sh
+   cd /путь/к/migration-hub
+   ./.cursor-mcp-serena.sh
    ```
    Или с определением по текущей директории:
    ```bash
-   cd /media/worker/STORE/P_DEV/migration-hub
+   cd /путь/к/migration-hub
    uvx --from git+https://github.com/oraios/serena serena start-mcp-server --project-from-cwd
    ```
 
 4. **Конфигурация проекта** уже есть в `.serena/project.yml` (языки PHP и TypeScript, initial_prompt). При необходимости отредактируйте этот файл.
 
-5. **При использовании `--project-from-cwd`** проверьте, что проект в правильной директории:
-   - `--project-from-cwd` автоматически определяет проект из текущей рабочей директории
-   - Убедитесь, что Cursor открыт в корне проекта `/media/worker/STORE/P_DEV/migration-hub`
+5. **При использовании `--project-from-cwd`** убедитесь, что Cursor открыт в корне проекта migration-hub.
 
 ## Проверка подключения
 
@@ -228,10 +193,11 @@
 
 ## Файлы
 
-- Скрипт миграции БД: `/media/worker/STORE/P_DEV/migration-hub/.cursor-mcp-dbhub-migration.sh`
-- Скрипт клиента БД: `/media/worker/STORE/P_DEV/migration-hub/.cursor-mcp-dbhub-client.sh`
-- Скрипт Serena: `/media/worker/STORE/P_DEV/migration-hub/.cursor-mcp-serena.sh`
-- Конфигурация Serena: `/media/worker/STORE/P_DEV/migration-hub/.serena/project.yml`
-- Правило Cursor для Serena: `/media/worker/STORE/P_DEV/migration-hub/.cursor/rules/serena.mdc`
-- Конфигурация MCP: `~/.cursor/mcp.json`
+- Конфигурация MCP (project-level): `.cursor/mcp.json`
+- Скрипт миграции БД: `.cursor-mcp-dbhub-migration.sh`
+- Скрипт клиента БД: `.cursor-mcp-dbhub-client.sh`
+- Скрипт Serena: `.cursor-mcp-serena.sh`
+- Конфигурация Serena: `.serena/project.yml`
+- Правило Cursor для Serena: `.cursor/rules/serena.mdc`
+- Шаблон переменных: `.env.example` (скопировать в `.env`)
 - Переменные окружения: `.env` или `.env.prod.local` в корне проекта

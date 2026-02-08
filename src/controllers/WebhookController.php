@@ -96,19 +96,27 @@ class WebhookController
             // Обновляем статус в migrations_mapping
             $dbService->upsertMigrationMapping($brzProjectId, $mbProjectUuid, $metaData);
             
-            // Сохраняем результат в migration_result_list
+            // Сохраняем результат в migration_result_list и в migrations
             $migrationUuid = $data['migration_uuid'] ?? time() . random_int(100, 999);
+            // Для миграций от волны сервер присылает migration_uuid = wave_id (формат "timestamp_random")
+            $waveIdForSave = (isset($data['migration_uuid']) && preg_match('/^\d+_\d+$/', (string)$data['migration_uuid']))
+                ? $data['migration_uuid']
+                : null;
             $resultJson = $data;
             // Убираем служебные поля из result_json
             unset($resultJson['mb_project_uuid'], $resultJson['brz_project_id'], $resultJson['migration_uuid']);
             
-            $dbService->saveMigrationResult([
+            $savePayload = [
                 'migration_uuid' => $migrationUuid,
                 'brz_project_id' => $brzProjectId,
                 'brizy_project_domain' => $data['brizy_project_domain'] ?? '',
                 'mb_project_uuid' => $mbProjectUuid,
-                'result_json' => json_encode($resultJson)
-            ]);
+                'result_json' => json_encode($resultJson),
+            ];
+            if ($waveIdForSave !== null) {
+                $savePayload['wave_id'] = $waveIdForSave;
+            }
+            $dbService->saveMigrationResult($savePayload);
             
             error_log("[WebhookController::migrationResult] Статус миграции обновлен: status={$status}, mb_project_uuid={$mbProjectUuid}, brz_project_id={$brzProjectId}");
             
@@ -140,5 +148,44 @@ class WebhookController
                 'error' => $e->getMessage()
             ], 500);
         }
+    }
+
+    /**
+     * GET /api/webhooks/test-connection
+     * Тестовый эндпоинт: сервер миграции может вызвать GET, чтобы убедиться, что достучался до дашборда.
+     * Ответ содержит идентификатор сервиса (migration-dashboard) и время.
+     */
+    public function testConnectionGet(Request $request): JsonResponse
+    {
+        return new JsonResponse([
+            'success' => true,
+            'service' => 'migration-dashboard',
+            'message' => 'Dashboard is reachable',
+            'endpoint' => 'GET /api/webhooks/test-connection',
+            'timestamp' => date('c'),
+        ], 200);
+    }
+
+    /**
+     * POST /api/webhooks/test-connection
+     * Тестовый эндпоинт: сервер миграции отправляет POST с телом {"source": "migration_server"} (или любым JSON).
+     * Дашборд отвечает, что это он, и возвращает полученные данные — обе стороны убеждаются, что связь есть.
+     */
+    public function testConnectionPost(Request $request): JsonResponse
+    {
+        $content = $request->getContent();
+        $payload = $content ? json_decode($content, true) : [];
+        if (!is_array($payload)) {
+            $payload = [];
+        }
+        return new JsonResponse([
+            'success' => true,
+            'dashboard' => 'migration-dashboard',
+            'message' => 'Dashboard received your request',
+            'received_from' => $payload['source'] ?? 'unknown',
+            'your_payload' => $payload,
+            'endpoint' => 'POST /api/webhooks/test-connection',
+            'timestamp' => date('c'),
+        ], 200);
     }
 }

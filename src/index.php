@@ -235,16 +235,18 @@ return function (array $context, Request $request) use ($debugMode): Response {
             'endpoints' => [
                 '/api/health' => 'GET - Health check Dashboard API',
                 '/api/migration-server/health' => 'GET - Health check сервера миграции',
+                '/api/migration-server/handshake' => 'GET - Взаимное рукопожатие дашборд ↔ сервер миграции',
                 '/api/migrations' => 'GET - Список миграций',
                 '/api/migrations/:id' => 'GET - Детали миграции',
                 '/api/migrations/run' => 'POST - Запуск миграции',
                 '/api/migrations/:id/restart' => 'POST - Перезапуск миграции',
-                '/api/migrations/:id/lock' => 'DELETE - Удалить lock-файл миграции',
+                '/api/migrations/:id/lock' => 'DELETE - Снять блокировку (управляется сервером миграции, локальные lock-файлы не используются)',
                 '/api/migrations/:id/kill' => 'POST - Убить процесс миграции',
                 '/api/migrations/:id/process' => 'GET - Информация о процессе миграции (мониторинг)',
                 '/api/migrations/:id/cache' => 'DELETE - Удалить кэш-файл миграции',
                 '/api/migrations/:id/cache-all' => 'DELETE - Удалить все файлы кэша по ID проекта (только .json файлы, не lock-файлы)',
                 '/api/migrations/:id/reset-status' => 'POST - Сбросить статус миграции на pending',
+                '/api/migrations/:id/set-completed' => 'POST - Вручную установить статус миграции на completed (тело: { "brizy_project_domain": "..." } опционально)',
                 '/api/migrations/:id/hard-reset' => 'POST - Hard reset: удалить lock, cache, убить процесс и сбросить статус',
                 '/api/migrations/:id/logs' => 'GET - Логи миграции',
                 '/api/logs/:brz_project_id' => 'GET - Логи миграции (старый endpoint)',
@@ -259,6 +261,7 @@ return function (array $context, Request $request) use ($debugMode): Response {
                 '/api/waves/:id/migrations/:mb_uuid/logs' => 'GET - Логи миграции в волне',
                 '/api/waves/:id/projects/:brz_project_id/logs' => 'GET - Логи проекта в волне по brz_project_id',
                 '/api/waves/:id/migrations/:mb_uuid/lock' => 'DELETE - Удалить lock-файл миграции',
+                '/api/webhooks/test-connection' => 'GET/POST - Тест связи дашборд ↔ сервер миграции (без авторизации)',
             ]
         ], 200);
         $healthResponse->headers->set('Content-Type', 'application/json; charset=utf-8');
@@ -290,6 +293,26 @@ return function (array $context, Request $request) use ($debugMode): Response {
                     'available' => false,
                     'message' => 'Ошибка при проверке health сервера миграции: ' . $e->getMessage(),
                     'timestamp' => date('Y-m-d H:i:s')
+                ], 500);
+            }
+        }
+    }
+
+    // Взаимное рукопожатие: дашборд опрашивает сервер миграции, сервер опрашивает дашборд — оба убеждаются, что связь есть
+    if ($apiPath === '/migration-server/handshake') {
+        if ($request->getMethod() === 'GET') {
+            try {
+                $apiProxy = new \Dashboard\Services\ApiProxyService();
+                $result = $apiProxy->getMigrationServerHandshake();
+                $code = ($result['success'] && ($result['handshake_with_dashboard'] ?? '') === 'ok') ? 200 : 503;
+                $response = new JsonResponse($result, $code);
+                $response->headers->set('Content-Type', 'application/json; charset=utf-8');
+                return $response;
+            } catch (\Exception $e) {
+                return new JsonResponse([
+                    'success' => false,
+                    'message' => 'Ошибка рукопожатия: ' . $e->getMessage(),
+                    'handshake_with_dashboard' => 'fail',
                 ], 500);
             }
         }
@@ -1376,6 +1399,32 @@ return function (array $context, Request $request) use ($debugMode): Response {
             }
         }
 
+        // Тест связи дашборд ↔ сервер миграции (без авторизации)
+        if (preg_match('#^/webhooks/test-connection$#', $apiPath)) {
+            require_once __DIR__ . '/controllers/WebhookController.php';
+            $controller = new \Dashboard\Controllers\WebhookController();
+            if ($request->getMethod() === 'GET') {
+                return $controller->testConnectionGet($request);
+            }
+            if ($request->getMethod() === 'POST') {
+                return $controller->testConnectionPost($request);
+            }
+        }
+
+        // GET /waves и GET /waves/:id — в режиме отладки (APP_DEBUG=true) разрешены без авторизации
+        $appDebug = ($_ENV['APP_DEBUG'] ?? getenv('APP_DEBUG')) === 'true';
+        if ($appDebug && $request->getMethod() === 'GET') {
+            if (preg_match('#^/waves/([^/]+)$#', $apiPath, $matches)) {
+                $waveId = $matches[1];
+                $controller = new WaveController();
+                return $controller->getDetails($request, $waveId);
+            }
+            if (preg_match('#^/waves$#', $apiPath)) {
+                $controller = new WaveController();
+                return $controller->list($request);
+            }
+        }
+
         // Проверка авторизации для защищенных endpoints
         $authMiddleware = new AuthMiddleware();
         $authResponse = $authMiddleware->checkAuth($request);
@@ -1466,6 +1515,14 @@ return function (array $context, Request $request) use ($debugMode): Response {
                 $id = (int)$matches[1];
                 $controller = new MigrationController();
                 return $controller->removeAllCache($request, $id);
+            }
+        }
+
+        if (preg_match('#^/migrations/(\d+)/set-completed$#', $apiPath, $matches)) {
+            if ($request->getMethod() === 'POST') {
+                $id = (int)$matches[1];
+                $controller = new MigrationController();
+                return $controller->setCompleted($request, $id);
             }
         }
 

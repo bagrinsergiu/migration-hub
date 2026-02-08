@@ -326,8 +326,8 @@ class MigrationService
     }
 
     /**
-     * Проверить и обновить статус миграции, если процесс не найден
-     * 
+     * Проверить и обновить статус миграции по данным API сервера миграции (только когда в БД in_progress).
+     *
      * @param string $mbUuid UUID проекта MB
      * @param int $brzProjectId ID проекта Brizy
      * @param array $mapping Данные маппинга
@@ -335,78 +335,32 @@ class MigrationService
      */
     private function checkAndUpdateStaleStatus(string $mbUuid, int $brzProjectId, array $mapping): bool
     {
-        // Парсим changes_json
         $changesJson = [];
         if (!empty($mapping['changes_json'])) {
-            $changesJson = is_string($mapping['changes_json']) 
-                ? json_decode($mapping['changes_json'], true) 
+            $changesJson = is_string($mapping['changes_json'])
+                ? json_decode($mapping['changes_json'], true)
                 : $mapping['changes_json'];
         }
-        
-        // Проверяем, если статус in_progress
         if (!isset($changesJson['status']) || $changesJson['status'] !== 'in_progress') {
             return false;
         }
-        
-        // Проверяем процесс
-        $processInfo = $this->findMigrationProcess($mbUuid, $brzProjectId);
-        
-        // Если процесс не запущен и lock-файл старый (более 10 минут) или не существует
-        if (!$processInfo['running']) {
-            $lockFile = $this->getLockFilePath($mbUuid, $brzProjectId);
-            $lockFileAge = file_exists($lockFile) ? (time() - filemtime($lockFile)) : 999999;
-            
-            // Если lock-файл не существует или очень старый (более 10 минут)
-            if (!file_exists($lockFile) || $lockFileAge > 600) {
-                // КРИТИЧНО: Перед установкой статуса error, проверяем логи миграции
-                // Если миграция завершилась успешно, обновляем статус на completed
-                $migrationCompleted = $this->checkMigrationCompletedFromLogs($brzProjectId);
-                
-                try {
-                    if ($migrationCompleted) {
-                        // Миграция завершилась успешно
-                        $changesJson['status'] = 'completed';
-                        $changesJson['completed_at'] = date('Y-m-d H:i:s');
-                        $changesJson['status_updated_at'] = date('Y-m-d H:i:s');
-                        $changesJson['status_source'] = 'log_file_check';
-                    } else {
-                        // Миграция не завершилась или завершилась с ошибкой
-                        $changesJson['status'] = 'error';
-                        $changesJson['error'] = 'Процесс миграции был прерван или завершился некорректно. Статус обновлен автоматически.';
-                        $changesJson['status_updated_at'] = date('Y-m-d H:i:s');
-                    }
-                    
-                    $this->dbService->upsertMigrationMapping(
-                        $brzProjectId,
-                        $mbUuid,
-                        $changesJson
-                    );
-                    
-                    if ($migrationCompleted) {
-                        $url = $changesJson['brizy_project_domain'] ?? null;
-                        if (empty($url)) {
-                            $result = $this->dbService->getMigrationResultByUuid($mbUuid);
-                            $url = $result['brizy_project_domain'] ?? null;
-                        }
-                        if (!empty($url)) {
-                            try {
-                                $googleSheetsService = new GoogleSheetsService();
-                                $googleSheetsService->updateWebsiteBrizyForMigration($mbUuid, $url);
-                            } catch (Exception $e) {
-                                error_log("[MigrationService::checkAndUpdateStaleStatus] updateWebsiteBrizyForMigration: " . $e->getMessage());
-                            }
-                        }
-                    }
-                    
-                    return true;
-                } catch (Exception $e) {
-                    error_log("Ошибка автоматического обновления статуса: " . $e->getMessage());
-                    return false;
-                }
+
+        try {
+            $serverResponse = $this->apiProxy->getMigrationStatusFromServer($mbUuid, $brzProjectId);
+            if (!$serverResponse['success'] || !isset($serverResponse['data'])) {
+                return false;
             }
+            $serverStatus = $serverResponse['data'];
+            $status = $serverStatus['status'] ?? null;
+            if (!in_array($status, ['completed', 'error', 'failed', 'success'], true)) {
+                return false;
+            }
+            $this->syncMigrationStatusFromServer($mbUuid, $brzProjectId, $serverStatus);
+            return true;
+        } catch (Exception $e) {
+            error_log("[MigrationService::checkAndUpdateStaleStatus] " . $e->getMessage());
+            return false;
         }
-        
-        return false;
     }
 
     /**
@@ -497,7 +451,8 @@ class MigrationService
 
     /**
      * Синхронизировать статус миграции из ответа сервера миграции (при опросе API).
-     * Обновляет migrations_mapping, чтобы getMigrationDetails показывал актуальный статус.
+     * Обновляет migrations_mapping только по фактическому status из API (completed/success/error),
+     * без вывода завершения по прогрессу (100% — это доля обработанных страниц, не факт завершения).
      *
      * @param string $mbUuid
      * @param int $brzProjectId
@@ -544,6 +499,15 @@ class MigrationService
         }
 
         $this->dbService->upsertMigrationMapping($brzProjectId, $mbUuid, $changesJson);
+
+        if ($status === 'completed' && !empty($changesJson['brizy_project_domain'])) {
+            try {
+                $googleSheetsService = new GoogleSheetsService();
+                $googleSheetsService->updateWebsiteBrizyForMigration($mbUuid, $changesJson['brizy_project_domain']);
+            } catch (Exception $e) {
+                error_log('[MigrationService::syncMigrationStatusFromServer] updateWebsiteBrizyForMigration: ' . $e->getMessage());
+            }
+        }
     }
 
     /**
@@ -624,68 +588,20 @@ class MigrationService
     }
 
     /**
-     * Удалить lock-файл миграции
-     * 
+     * «Удаление» блокировки миграции. Блокировка управляется сервером миграции (GET/POST /migration-status).
+     * Локальные lock-файлы не используются. Для повторного запуска используйте «Перезапуск» или «Сброс статуса».
+     *
      * @param string $mbUuid UUID проекта MB
      * @param int $brzProjectId ID проекта Brizy
      * @return array
-     * @throws Exception
      */
     public function removeMigrationLock(string $mbUuid, int $brzProjectId): array
     {
-        $lockFile = $this->getLockFilePath($mbUuid, $brzProjectId);
-        
-        if (!file_exists($lockFile)) {
-            return [
-                'success' => true,
-                'message' => 'Lock-файл не найден (возможно, уже удален)',
-                'lock_file' => $lockFile,
-                'removed' => false
-            ];
-        }
-        
-        $cachePath = dirname($lockFile);
-        if (!is_writable($lockFile) && !is_writable($cachePath)) {
-            throw new Exception('Нет прав на удаление lock-файла: ' . $lockFile);
-        }
-        
-        $removed = @unlink($lockFile);
-        
-        if (!$removed) {
-            throw new Exception('Не удалось удалить lock-файл: ' . $lockFile);
-        }
-        
-        // Обновляем статус миграции в БД, если она была в процессе
-        try {
-            $mapping = $this->dbService->getMigrationById($brzProjectId);
-            if ($mapping && isset($mapping['changes_json'])) {
-                $changesJson = is_string($mapping['changes_json']) 
-                    ? json_decode($mapping['changes_json'], true) 
-                    : $mapping['changes_json'];
-                
-                // Если статус был in_progress, обновляем на error или pending
-                if (isset($changesJson['status']) && $changesJson['status'] === 'in_progress') {
-                    $this->dbService->upsertMigrationMapping(
-                        $brzProjectId,
-                        $mbUuid,
-                        [
-                            'status' => 'error',
-                            'error' => 'Lock-файл удален вручную. Процесс был прерван.',
-                            'updated_at' => date('Y-m-d H:i:s'),
-                        ]
-                    );
-                }
-            }
-        } catch (Exception $e) {
-            // Логируем ошибку, но не прерываем выполнение
-            error_log("Ошибка обновления статуса миграции при удалении lock-файла: " . $e->getMessage());
-        }
-        
         return [
             'success' => true,
-            'message' => 'Lock-файл успешно удален',
-            'lock_file' => $lockFile,
-            'removed' => true
+            'message' => 'Блокировка управляется сервером миграции. Для повторного запуска используйте «Перезапуск» или «Сброс статуса».',
+            'lock_file' => null,
+            'removed' => false
         ];
     }
 
@@ -1040,159 +956,53 @@ class MigrationService
             // Игнорируем ошибки БД
         }
         
-        // ПРИОРИТЕТ: Сначала опрашиваем сервер миграции для получения актуального статуса
-        $serverStatus = null;
-        $source = 'local_file_check'; // По умолчанию используем локальную проверку
+        $serverResponse = [];
         try {
             $serverResponse = $this->apiProxy->getMigrationStatusFromServer($mbUuid, $brzProjectId);
             if ($serverResponse['success'] && isset($serverResponse['data'])) {
                 $serverStatus = $serverResponse['data'];
-                $source = 'migration_server_api';
-                
-                // Синхронизируем статус с сервером миграции
                 if ($mapping) {
                     $this->syncMigrationStatusFromServer($mbUuid, $brzProjectId, $serverStatus);
                 }
-                
-                // Определяем, запущена ли миграция на сервере
-                $isRunning = isset($serverStatus['status']) && in_array($serverStatus['status'], ['in_progress', 'running'], true);
-                
-                // Формируем результат на основе данных сервера
-                $result = [
+                $status = $serverStatus['status'] ?? '';
+                $isRunning = in_array($status, ['in_progress', 'running'], true);
+                $processMessage = $isRunning ? 'Миграция выполняется на сервере миграции'
+                    : (in_array($status, ['completed', 'success'], true) ? 'Миграция завершена'
+                        : ($status === 'error' ? 'Миграция завершилась с ошибкой' : 'Миграция не запущена'));
+                return [
                     'success' => true,
-                    'source' => $source,
-                    'lock_file_exists' => $isRunning, // Если миграция запущена на сервере, считаем что lock существует
-                    'lock_file' => null, // Не используем локальный путь к lock файлу
+                    'source' => 'migration_server_api',
+                    'lock_file_exists' => $isRunning,
+                    'lock_file' => null,
                     'process' => [
                         'running' => $isRunning,
-                        'status' => $serverStatus['status'] ?? 'unknown',
+                        'status' => $status,
                         'progress' => $serverStatus['progress'] ?? null,
                         'started_at' => $serverStatus['started_at'] ?? null,
                         'updated_at' => $serverStatus['updated_at'] ?? null,
                         'current_stage' => $serverStatus['progress']['current_stage'] ?? null,
-                        'message' => $isRunning ? 'Миграция выполняется на сервере миграции' : 'Миграция не запущена на сервере'
+                        'message' => $processMessage
                     ],
                     'server_status' => $serverStatus
                 ];
-                
-                // Если миграция завершена или в ошибке, проверяем локальный lock файл как fallback
-                if (!$isRunning && ($serverStatus['status'] === 'completed' || $serverStatus['status'] === 'error')) {
-                    // Проверяем локальный lock файл только для информации (не для определения статуса)
-                    $lockFile = $this->getLockFilePath($mbUuid, $brzProjectId);
-                    $lockFileExists = @file_exists($lockFile);
-                    if ($lockFileExists) {
-                        $result['lock_file_exists'] = true;
-                        $result['lock_file'] = $lockFile;
-                    }
-                }
-                
-                return $result;
             }
         } catch (Exception $e) {
-            // Если сервер недоступен, логируем и продолжаем с локальной проверкой
-            error_log("[MigrationService::getMigrationProcessInfo] Не удалось получить статус с сервера миграции: " . $e->getMessage());
+            error_log("[MigrationService::getMigrationProcessInfo] " . $e->getMessage());
         }
-        
-        // FALLBACK: Если сервер недоступен, используем локальную проверку lock файла
-        // Но обрабатываем ошибки доступа к файлу gracefully
-        $lockFile = $this->getLockFilePath($mbUuid, $brzProjectId);
-        $lockFileExists = false;
-        try {
-            $lockFileExists = file_exists($lockFile);
-        } catch (Exception $e) {
-            // Если файл находится на удаленном сервере и недоступен, это нормально
-            error_log("[MigrationService::getMigrationProcessInfo] Не удалось проверить локальный lock файл (возможно, файл на сервере миграции): " . $e->getMessage());
-        }
-        
-        $processInfo = $this->findMigrationProcess($mbUuid, $brzProjectId);
-        
-        // Если lock-файл не существует и процесс не запущен, проверяем логи
-        // чтобы определить, завершилась ли миграция успешно
-        if (!$lockFileExists && !$processInfo['running']) {
-            // Проверяем и обновляем статус, если процесс не найден
-            if ($mapping) {
-                $this->checkAndUpdateStaleStatus($mbUuid, $brzProjectId, $mapping);
-            } else {
-                // Если маппинга нет, но есть lock-файл был, проверяем логи напрямую
-                // и обновляем статус в migration_result_list
-                $migrationCompleted = $this->checkMigrationCompletedFromLogs($brzProjectId);
-                if ($migrationCompleted) {
-                    try {
-                        // Обновляем статус в migration_result_list
-                        $dbService = new \Dashboard\Services\DatabaseService();
-                        $db = $dbService->getWriteConnection();
-                        $migrationResult = $db->find(
-                            'SELECT * FROM migration_result_list WHERE brz_project_id = ? ORDER BY created_at DESC LIMIT 1',
-                            [$brzProjectId]
-                        );
-                        
-                        if ($migrationResult) {
-                            $resultJson = json_decode($migrationResult['result_json'] ?? '{}', true);
-                            if (!isset($resultJson['status']) || $resultJson['status'] !== 'completed') {
-                                $resultJson['status'] = 'completed';
-                                $resultJson['completed_at'] = date('Y-m-d H:i:s');
-                                $resultJson['status_source'] = 'log_file_check';
-                                
-                                // Используем рефлексию для доступа к PDO
-                                $reflection = new \ReflectionClass($db);
-                                $pdoProperty = $reflection->getProperty('pdo');
-                                $pdoProperty->setAccessible(true);
-                                $pdo = $pdoProperty->getValue($db);
-                                
-                                $stmt = $pdo->prepare(
-                                    'UPDATE migration_result_list SET result_json = ? WHERE brz_project_id = ?'
-                                );
-                                $stmt->execute([json_encode($resultJson), $brzProjectId]);
-                            }
-                        }
-                    } catch (Exception $e) {
-                        error_log("Ошибка обновления статуса из логов: " . $e->getMessage());
-                    }
-                }
-            }
-        } elseif ($mapping) {
-            // Проверяем и обновляем статус, если процесс не найден
-            $this->checkAndUpdateStaleStatus($mbUuid, $brzProjectId, $mapping);
-        }
-        
-        $result = [
-            'success' => true,
-            'source' => $source,
-            'lock_file_exists' => $lockFileExists,
-            'lock_file' => $lockFileExists ? $lockFile : null,
-            'process' => $processInfo
+
+        $errorMessage = $serverResponse['error'] ?? $serverResponse['message'] ?? 'Сервер миграции недоступен';
+        return [
+            'success' => false,
+            'source' => 'migration_server_api',
+            'error' => $errorMessage,
+            'lock_file_exists' => false,
+            'lock_file' => null,
+            'process' => [
+                'running' => false,
+                'status' => 'unknown',
+                'message' => $errorMessage
+            ]
         ];
-        
-        // Если процесс запущен, получаем дополнительную информацию
-        if ($processInfo['running'] && $processInfo['pid']) {
-            $pid = $processInfo['pid'];
-            
-            // Получаем информацию о процессе через ps
-            $command = sprintf('ps -p %d -o pid,ppid,user,start,time,cmd --no-headers 2>/dev/null', $pid);
-            $output = shell_exec($command);
-            
-            if ($output) {
-                $parts = preg_split('/\s+/', trim($output), 6);
-                if (count($parts) >= 6) {
-                    $result['process_details'] = [
-                        'pid' => (int)$parts[0],
-                        'ppid' => (int)$parts[1],
-                        'user' => $parts[2],
-                        'start' => $parts[3],
-                        'time' => $parts[4],
-                        'command' => $parts[5]
-                    ];
-                }
-            }
-        }
-        
-        // Добавляем информацию о том, был ли статус обновлен
-        if (isset($processInfo['should_update_status']) && $processInfo['should_update_status']) {
-            $result['status_updated'] = true;
-            $result['message'] = 'Статус миграции был автоматически обновлен, так как процесс не найден.';
-        }
-        
-        return $result;
     }
 
     /**
@@ -1390,203 +1200,90 @@ class MigrationService
     }
 
     /**
-     * Hard reset миграции: удаляет lock-файл, cache-файл и сбрасывает статус в БД
-     * 
+     * Установить статус миграции на completed (ручное исправление, если миграция завершилась успешно, но в БД ошибочно error/pending).
+     *
+     * @param string $mbUuid UUID проекта MB
+     * @param int $brzProjectId ID проекта Brizy
+     * @param string|null $brizyProjectDomain URL сайта Brizy (если не передан, берётся из последнего результата)
+     * @return array
+     * @throws Exception
+     */
+    public function setMigrationCompleted(string $mbUuid, int $brzProjectId, ?string $brizyProjectDomain = null): array
+    {
+        $mapping = $this->dbService->getMigrationById($brzProjectId);
+        if (!$mapping) {
+            throw new Exception('Миграция не найдена');
+        }
+
+        $changesJson = [];
+        if (!empty($mapping['changes_json'])) {
+            $changesJson = is_string($mapping['changes_json'])
+                ? json_decode($mapping['changes_json'], true)
+                : $mapping['changes_json'];
+        }
+        if (!is_array($changesJson)) {
+            $changesJson = [];
+        }
+
+        if ($brizyProjectDomain === null || $brizyProjectDomain === '') {
+            $result = $this->dbService->getMigrationResultByUuid($mbUuid);
+            $brizyProjectDomain = $result['brizy_project_domain'] ?? null;
+            if (empty($brizyProjectDomain) && !empty($result['result_json'])) {
+                $data = is_string($result['result_json']) ? json_decode($result['result_json'], true) : $result['result_json'];
+                $brizyProjectDomain = $data['brizy_project_domain'] ?? $data['value']['brizy_project_domain'] ?? null;
+            }
+        }
+
+        $changesJson['status'] = 'completed';
+        $changesJson['completed_at'] = date('Y-m-d H:i:s');
+        $changesJson['status_updated_at'] = date('Y-m-d H:i:s');
+        $changesJson['updated_at'] = date('Y-m-d H:i:s');
+        $changesJson['status_source'] = 'manual_set_completed';
+        if ($brizyProjectDomain !== null && $brizyProjectDomain !== '') {
+            $changesJson['brizy_project_domain'] = $brizyProjectDomain;
+        }
+        unset($changesJson['error']);
+
+        $this->dbService->upsertMigrationMapping($brzProjectId, $mbUuid, $changesJson);
+
+        if (!empty($brizyProjectDomain)) {
+            try {
+                $googleSheetsService = new GoogleSheetsService();
+                $googleSheetsService->updateWebsiteBrizyForMigration($mbUuid, $brizyProjectDomain);
+            } catch (Exception $e) {
+                error_log('[MigrationService::setMigrationCompleted] updateWebsiteBrizyForMigration: ' . $e->getMessage());
+            }
+        }
+
+        return [
+            'success' => true,
+            'message' => 'Статус миграции установлен на completed',
+            'new_status' => 'completed',
+            'brizy_project_domain' => $brizyProjectDomain,
+        ];
+    }
+
+    /**
+     * Hard reset миграции: удаляет локальный cache-файл и сбрасывает статус в БД.
+     * Процесс и блокировка управляются сервером миграции (API GET /migration-status).
+     *
      * @param string $mbUuid UUID проекта MB
      * @param int $brzProjectId ID проекта Brizy
      * @return array
-     * @throws Exception
      */
     public function hardResetMigration(string $mbUuid, int $brzProjectId): array
     {
         $results = [
-            'lock_removed' => false,
             'cache_removed' => false,
             'status_reset' => false,
-            'process_killed' => false,
             'messages' => []
         ];
 
         try {
-            // Записываем в лог начало операции Hard Reset
-            $this->writeToMigrationLog($brzProjectId, $mbUuid, 
-                "Начало операции Hard Reset из панели управления. Будет выполнено: завершение процесса, удаление lock-файла, удаление cache-файла, сброс статуса.");
-            
-            // 1. Ищем и убиваем все процессы, связанные с миграцией
-            $lockFile = $this->getLockFilePath($mbUuid, $brzProjectId);
-            $pidsToKill = [];
-            
-            // 1.1. Проверяем процесс по PID из lock-файла
-            if (file_exists($lockFile)) {
-                $lockContent = @file_get_contents($lockFile);
-                if ($lockContent) {
-                    $lockData = json_decode($lockContent, true);
-                    if ($lockData && isset($lockData['pid']) && $lockData['pid'] > 0) {
-                        $pid = (int)$lockData['pid'];
-                        if ($this->isProcessRunning($pid)) {
-                            $pidsToKill[] = $pid;
-                        }
-                    }
-                }
-            }
-            
-            // 1.2. Ищем процессы через lsof по lock-файлу
-            if (file_exists($lockFile)) {
-                $lockFilePath = realpath($lockFile);
-                if ($lockFilePath) {
-                    $command = sprintf('lsof -t "%s" 2>/dev/null', escapeshellarg($lockFilePath));
-                    $output = shell_exec($command);
-                    if ($output) {
-                        $lsofPids = array_filter(array_map('trim', explode("\n", trim($output))));
-                        foreach ($lsofPids as $lsofPid) {
-                            $pid = (int)$lsofPid;
-                            if ($pid > 0 && $this->isProcessRunning($pid) && !in_array($pid, $pidsToKill)) {
-                                $pidsToKill[] = $pid;
-                            }
-                        }
-                    }
-                }
-            }
-            
-            // 1.3. Ищем процессы через fuser по lock-файлу
-            if (file_exists($lockFile)) {
-                $command = sprintf('fuser "%s" 2>/dev/null', escapeshellarg($lockFile));
-                $output = shell_exec($command);
-                if ($output) {
-                    preg_match_all('/(\d+)/', $output, $matches);
-                    if (!empty($matches[1])) {
-                        foreach ($matches[1] as $fuserPid) {
-                            $pid = (int)$fuserPid;
-                            if ($pid > 0 && $this->isProcessRunning($pid) && !in_array($pid, $pidsToKill)) {
-                                $pidsToKill[] = $pid;
-                            }
-                        }
-                    }
-                }
-            }
-            
-            // 1.4. Ищем процессы по команде (migration wrapper)
-            $searchPatterns = [
-                sprintf('migration.*%d', $brzProjectId),
-                sprintf('migration_wrapper.*%d', $brzProjectId),
-                sprintf('%s.*%d', preg_quote($mbUuid, '/'), $brzProjectId),
-            ];
-            
-            foreach ($searchPatterns as $pattern) {
-                $command = sprintf('ps aux | grep -E "%s" | grep -v grep 2>/dev/null', escapeshellarg($pattern));
-                $output = shell_exec($command);
-                if ($output) {
-                    $lines = array_filter(explode("\n", trim($output)));
-                    foreach ($lines as $line) {
-                        if (preg_match('/^\S+\s+(\d+)/', $line, $matches)) {
-                            $pid = (int)$matches[1];
-                            if ($pid > 0 && $this->isProcessRunning($pid) && !in_array($pid, $pidsToKill)) {
-                                $pidsToKill[] = $pid;
-                            }
-                        }
-                    }
-                }
-            }
-            
-            // 1.4.1. Ищем процессы по wrapper скрипту напрямую (если есть в lock-файле)
-            if (file_exists($lockFile)) {
-                $lockContent = @file_get_contents($lockFile);
-                if ($lockContent) {
-                    $lockData = json_decode($lockContent, true);
-                    if ($lockData && isset($lockData['wrapper_script']) && file_exists($lockData['wrapper_script'])) {
-                        $wrapperScript = $lockData['wrapper_script'];
-                        $command = sprintf('ps aux | grep -F "%s" | grep -v grep 2>/dev/null', escapeshellarg($wrapperScript));
-                        $output = shell_exec($command);
-                        if ($output) {
-                            $lines = array_filter(explode("\n", trim($output)));
-                            foreach ($lines as $line) {
-                                if (preg_match('/^\S+\s+(\d+)/', $line, $matches)) {
-                                    $pid = (int)$matches[1];
-                                    if ($pid > 0 && $this->isProcessRunning($pid) && !in_array($pid, $pidsToKill)) {
-                                        $pidsToKill[] = $pid;
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-            
-            // 1.5. Убиваем все найденные процессы
-            if (!empty($pidsToKill)) {
-                foreach ($pidsToKill as $pid) {
-                    try {
-                        // Сначала пробуем SIGTERM
-                        $sigtermSent = false;
-                        if (function_exists('posix_kill')) {
-                            $sigtermSent = @posix_kill($pid, 15); // SIGTERM = 15
-                        } else {
-                            exec(sprintf('kill -TERM %d 2>/dev/null', $pid), $killOutput, $killReturnCode);
-                            $sigtermSent = ($killReturnCode === 0);
-                        }
-                        
-                        // Ждем немного
-                        usleep(500000); // 0.5 секунды
-                        
-                        // Если процесс все еще работает, убиваем принудительно
-                        if ($this->isProcessRunning($pid)) {
-                            $sigkillSent = false;
-                            if (function_exists('posix_kill')) {
-                                $sigkillSent = @posix_kill($pid, 9); // SIGKILL = 9
-                            } else {
-                                exec(sprintf('kill -KILL %d 2>/dev/null', $pid), $killOutput2, $killReturnCode2);
-                                $sigkillSent = ($killReturnCode2 === 0);
-                            }
-                            usleep(200000); // 0.2 секунды
-                        }
-                        
-                        // Проверяем результат
-                        if (!$this->isProcessRunning($pid)) {
-                            $results['process_killed'] = true;
-                            $results['messages'][] = 'Процесс миграции завершен (PID: ' . $pid . ')';
-                            
-                            // Записываем в лог миграции
-                            $this->writeToMigrationLog($brzProjectId, $mbUuid, 
-                                "Процесс миграции принудительно завершен из панели управления (Hard Reset). PID: $pid");
-                        } else {
-                            $results['messages'][] = 'Не удалось завершить процесс (PID: ' . $pid . ') - процесс все еще работает';
-                            
-                            // Записываем в лог миграции
-                            $this->writeToMigrationLog($brzProjectId, $mbUuid, 
-                                "Попытка принудительного завершения процесса из панели управления (Hard Reset) не удалась. PID: $pid - процесс все еще работает");
-                        }
-                    } catch (Exception $e) {
-                        $results['messages'][] = 'Ошибка при завершении процесса (PID: ' . $pid . '): ' . $e->getMessage();
-                        error_log("Hard reset: ошибка завершения процесса PID $pid: " . $e->getMessage());
-                    } catch (\Throwable $e) {
-                        $results['messages'][] = 'Критическая ошибка при завершении процесса (PID: ' . $pid . '): ' . $e->getMessage();
-                        error_log("Hard reset: критическая ошибка завершения процесса PID $pid: " . $e->getMessage());
-                    }
-                }
-            } else {
-                $results['messages'][] = 'Процесс миграции не найден (возможно, уже завершен)';
-            }
+            $this->writeToMigrationLog($brzProjectId, $mbUuid,
+                "Начало операции Hard Reset из панели управления. Будет выполнено: удаление cache-файла, сброс статуса в БД.");
 
-            // 2. Удаляем lock-файл
-            try {
-                $lockResult = $this->removeMigrationLock($mbUuid, $brzProjectId);
-                if ($lockResult['success']) {
-                    $results['lock_removed'] = $lockResult['removed'] ?? false;
-                    if ($results['lock_removed']) {
-                        $results['messages'][] = 'Lock-файл удален';
-                        
-                        // Записываем в лог миграции
-                        $this->writeToMigrationLog($brzProjectId, $mbUuid, 
-                            "Lock-файл удален из панели управления (Hard Reset)");
-                    } else {
-                        $results['messages'][] = 'Lock-файл не найден (уже удален)';
-                    }
-                }
-            } catch (Exception $e) {
-                $results['messages'][] = 'Ошибка удаления lock-файла: ' . $e->getMessage();
-            }
-
-            // 3. Удаляем cache-файл
+            // 1. Удаляем cache-файл
             try {
                 $cacheResult = $this->removeMigrationCache($mbUuid, $brzProjectId);
                 if ($cacheResult['success']) {
@@ -1605,7 +1302,7 @@ class MigrationService
                 $results['messages'][] = 'Ошибка удаления кэш-файла: ' . $e->getMessage();
             }
 
-            // 4. Сбрасываем статус в БД
+            // 2. Сбрасываем статус в БД
             try {
                 $statusResult = $this->resetMigrationStatus($mbUuid, $brzProjectId);
                 if ($statusResult['success']) {
@@ -1620,10 +1317,7 @@ class MigrationService
                 $results['messages'][] = 'Ошибка сброса статуса: ' . $e->getMessage();
             }
 
-            // Записываем в лог завершение операции Hard Reset
             $summary = "Hard Reset завершен. ";
-            $summary .= "Процесс: " . ($results['process_killed'] ? 'завершен' : 'не найден') . ". ";
-            $summary .= "Lock-файл: " . ($results['lock_removed'] ? 'удален' : 'не найден') . ". ";
             $summary .= "Cache-файл: " . ($results['cache_removed'] ? 'удален' : 'не найден') . ". ";
             $summary .= "Статус: " . ($results['status_reset'] ? 'сброшен' : 'не изменен') . ".";
             $this->writeToMigrationLog($brzProjectId, $mbUuid, $summary);
