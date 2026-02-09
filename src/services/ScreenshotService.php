@@ -48,8 +48,12 @@ class ScreenshotService
             throw new Exception("Неверный тип скриншота. Используйте: 'source' или 'migrated'");
         }
 
+        // Получаем mbSiteId для сохранения файла в правильную директорию
+        $mbSiteId = $this->getMbSiteIdByUuid($mbUuid);
+        $dirId = $mbSiteId ? (string)$mbSiteId : $mbUuid; // Используем mbSiteId, если доступен, иначе mbUuid
+
         // Создаем директорию для проекта, если её нет
-        $projectDir = $this->screenshotsDir . $mbUuid . '/';
+        $projectDir = $this->screenshotsDir . $dirId . '/';
         if (!is_dir($projectDir)) {
             mkdir($projectDir, 0755, true);
         }
@@ -79,10 +83,13 @@ class ScreenshotService
         // Сохраняем информацию о скриншоте в БД
         $this->saveScreenshotMetadata($mbUuid, $pageSlug, $type, $filename, $filePath);
 
+        // Получаем mbSiteId для генерации URL (используем тот же dirId, что и для сохранения)
+        $urlSiteId = $mbSiteId ? (string)$mbSiteId : $mbUuid; // Fallback на mbUuid, если mbSiteId не найден
+
         return [
             'filename' => $filename,
             'path' => $filePath,
-            'url' => '/api/screenshots/' . $filename,
+            'url' => '/api/screenshots/' . $urlSiteId . '/' . $filename,
             'size' => filesize($filePath),
             'type' => $type
         ];
@@ -124,10 +131,14 @@ class ScreenshotService
             return null;
         }
 
+        // Получаем mbSiteId для генерации URL
+        $mbSiteId = $this->getMbSiteIdByUuid($mbUuid);
+        $urlSiteId = $mbSiteId ? $mbSiteId : $mbUuid; // Fallback на mbUuid, если mbSiteId не найден
+
         return [
             'filename' => $screenshot['filename'],
             'path' => $filePath,
-            'url' => '/api/screenshots/' . $screenshot['filename'],
+            'url' => '/api/screenshots/' . $urlSiteId . '/' . $screenshot['filename'],
             'size' => filesize($filePath),
             'type' => $type,
             'created_at' => $screenshot['created_at']
@@ -135,87 +146,39 @@ class ScreenshotService
     }
 
     /**
-     * Получить файл скриншота только по имени файла (без mbUuid)
+     * Получить файл скриншота по mbSiteId
      * 
+     * @param string|int $mbSiteId MB Site ID проекта
      * @param string $filename Имя файла
      * @return string|null Путь к файлу или null, если не найден
      */
-    public function getScreenshotFileByFilename(string $filename): ?string
+    public function getScreenshotFileBySiteId($mbSiteId, string $filename): ?string
     {
         $filename = basename($filename);
+        $mbSiteId = (string)$mbSiteId;
         
-        // Сначала ищем в БД по имени файла
-        $db = $this->dbService->getWriteConnection();
-        $screenshot = $db->find(
-            'SELECT file_path 
-             FROM dashboard_screenshots 
-             WHERE filename = ? 
-             ORDER BY created_at DESC 
-             LIMIT 1',
-            [$filename]
-        );
+        // Пробуем найти файл в директории mb_site_id
+        $filePath = $this->screenshotsDir . $mbSiteId . '/' . $filename;
         
-        if ($screenshot && isset($screenshot['file_path'])) {
-            $filePath = $screenshot['file_path'];
-            if (file_exists($filePath) && is_file($filePath)) {
-                return $filePath;
-            }
+        if (file_exists($filePath) && is_file($filePath)) {
+            return $filePath;
         }
         
-        // Если не нашли в БД, ищем файл во всех поддиректориях var/screenshots/
-        if (is_dir($this->screenshotsDir)) {
-            $uuidDirs = glob($this->screenshotsDir . '*', GLOB_ONLYDIR) ?: [];
-            foreach ($uuidDirs as $dir) {
-                $potentialPath = $dir . '/' . $filename;
-                if (file_exists($potentialPath) && is_file($potentialPath)) {
-                    return $potentialPath;
-                }
-                
-                // Пробуем то же имя с другим расширением
-                $baseWithoutExt = pathinfo($filename, PATHINFO_FILENAME);
-                $altMatches = glob($dir . '/' . $baseWithoutExt . '.*');
-                if (!empty($altMatches) && file_exists($altMatches[0]) && is_file($altMatches[0])) {
-                    return $altMatches[0];
-                }
-            }
-        }
-        
-        // Также ищем в var/tmp/ (для обратной совместимости)
-        $tmpDir = $this->projectRoot . '/var/tmp/';
-        if (is_dir($tmpDir)) {
-            // Ищем в var/tmp/project_*/
-            $projectDirs = glob($tmpDir . 'project_*', GLOB_ONLYDIR) ?: [];
-            foreach ($projectDirs as $dir) {
-                $potentialPath = $dir . '/' . $filename;
-                if (file_exists($potentialPath) && is_file($potentialPath)) {
-                    return $potentialPath;
-                }
-                
-                $baseWithoutExt = pathinfo($filename, PATHINFO_FILENAME);
-                $altMatches = glob($dir . '/' . $baseWithoutExt . '.*');
-                if (!empty($altMatches) && file_exists($altMatches[0]) && is_file($altMatches[0])) {
-                    return $altMatches[0];
-                }
-            }
-            
-            // Ищем в корне var/tmp/
-            $rootPath = $tmpDir . $filename;
-            if (file_exists($rootPath) && is_file($rootPath)) {
-                return $rootPath;
-            }
-            
-            $baseWithoutExt = pathinfo($filename, PATHINFO_FILENAME);
-            $altMatches = glob($tmpDir . $baseWithoutExt . '.*');
+        // Пробуем то же имя с другим расширением (например .png вместо .jpg)
+        $baseWithoutExt = pathinfo($filename, PATHINFO_FILENAME);
+        $siteDir = $this->screenshotsDir . $mbSiteId . '/';
+        if (is_dir($siteDir)) {
+            $altMatches = glob($siteDir . $baseWithoutExt . '.*');
             if (!empty($altMatches) && file_exists($altMatches[0]) && is_file($altMatches[0])) {
                 return $altMatches[0];
             }
         }
-        
+
         return null;
     }
 
     /**
-     * Получить файл скриншота по пути
+     * Получить файл скриншота по пути (старый метод для обратной совместимости)
      * 
      * @param string $mbUuid MB UUID проекта
      * @param string $filename Имя файла
@@ -261,25 +224,7 @@ class ScreenshotService
             }
         }
         
-        // Если не нашли по UUID, пробуем найти только по имени файла (без учета UUID)
-        // Это нужно на случай, если файл был сохранен с другим UUID
-        $screenshot = $db->find(
-            'SELECT file_path 
-             FROM dashboard_screenshots 
-             WHERE filename = ? 
-             ORDER BY created_at DESC 
-             LIMIT 1',
-            [$filename]
-        );
-        
-        if ($screenshot && isset($screenshot['file_path'])) {
-            $filePath = $screenshot['file_path'];
-            if (file_exists($filePath) && is_file($filePath)) {
-                return $filePath;
-            }
-        }
-        
-        // Если не нашли в БД, пробуем стандартный путь
+        // Если не нашли в БД, пробуем стандартный путь по mbUuid
         $filePath = $this->screenshotsDir . $mbUuid . '/' . $filename;
         
         if (file_exists($filePath) && is_file($filePath)) {
@@ -296,20 +241,35 @@ class ScreenshotService
             }
         }
         
-        // Если не нашли по стандартному пути, ищем файл во всех поддиректориях
-        // Это нужно на случай, если файл был сохранен в другой директории
-        if (is_dir($this->screenshotsDir)) {
-            $uuidDirs = glob($this->screenshotsDir . '*', GLOB_ONLYDIR) ?: [];
-            foreach ($uuidDirs as $dir) {
-                $potentialPath = $dir . '/' . $filename;
-                if (file_exists($potentialPath) && is_file($potentialPath)) {
-                    return $potentialPath;
+        // Fallback: пробуем найти по mb_site_id (для обратной совместимости со старыми файлами)
+        // Получаем mb_site_id из миграции по mbUuid
+        try {
+            $migration = $db->find(
+                'SELECT mb_site_id FROM migrations WHERE mb_project_uuid = ? LIMIT 1',
+                [$mbUuid]
+            );
+            
+            if ($migration && isset($migration['mb_site_id']) && $migration['mb_site_id']) {
+                $mbSiteId = $migration['mb_site_id'];
+                $siteDir = $this->screenshotsDir . $mbSiteId . '/';
+                
+                // Пробуем найти файл в директории mb_site_id
+                $siteFilePath = $siteDir . $filename;
+                if (file_exists($siteFilePath) && is_file($siteFilePath)) {
+                    return $siteFilePath;
                 }
-                $altMatches = glob($dir . '/' . $baseWithoutExt . '.*');
-                if (!empty($altMatches) && file_exists($altMatches[0]) && is_file($altMatches[0])) {
-                    return $altMatches[0];
+                
+                // Пробуем с альтернативным расширением
+                if (is_dir($siteDir)) {
+                    $altMatches = glob($siteDir . $baseWithoutExt . '.*');
+                    if (!empty($altMatches) && file_exists($altMatches[0]) && is_file($altMatches[0])) {
+                        return $altMatches[0];
+                    }
                 }
             }
+        } catch (\Throwable $e) {
+            // Игнорируем ошибки при поиске по mb_site_id
+            error_log("Error searching screenshot by mb_site_id: " . $e->getMessage());
         }
 
         return null;
@@ -344,6 +304,31 @@ class ScreenshotService
              VALUES (?, ?, ?, ?, ?, NOW())',
             [$mbUuid, $pageSlug, $type, $filename, $filePath]
         );
+    }
+
+    /**
+     * Получить mb_site_id по mbUuid из таблицы migrations
+     * 
+     * @param string $mbUuid MB UUID проекта
+     * @return int|null mb_site_id или null, если не найден
+     */
+    private function getMbSiteIdByUuid(string $mbUuid): ?int
+    {
+        try {
+            $db = $this->dbService->getWriteConnection();
+            $migration = $db->find(
+                'SELECT mb_site_id FROM migrations WHERE mb_project_uuid = ? LIMIT 1',
+                [$mbUuid]
+            );
+            
+            if ($migration && isset($migration['mb_site_id']) && $migration['mb_site_id']) {
+                return (int)$migration['mb_site_id'];
+            }
+        } catch (\Throwable $e) {
+            error_log("Error getting mb_site_id by mbUuid: " . $e->getMessage());
+        }
+        
+        return null;
     }
 
     /**

@@ -41,6 +41,7 @@ export default function ProjectReviewDetails({
   const [loadingLogs, setLoadingLogs] = useState(false);
   const [screenshots, setScreenshots] = useState<string[]>([]);
   const [loadingScreenshots, setLoadingScreenshots] = useState(false);
+  const [mbSiteId, setMbSiteId] = useState<number | null>(null);
 
   useEffect(() => {
     const loadDetails = async () => {
@@ -53,6 +54,11 @@ export default function ProjectReviewDetails({
         
         if (data.success && data.data) {
           setDetails(data.data);
+          // Получаем mbSiteId из данных
+          const siteId = data.data.mb_site_id || data.data.result_data?.mb_site_id;
+          if (siteId) {
+            setMbSiteId(siteId);
+          }
           // Устанавливаем первую доступную вкладку
           if (data.data.allowed_tabs && data.data.allowed_tabs.length > 0) {
             setActiveTab(data.data.allowed_tabs[0]);
@@ -430,10 +436,11 @@ export default function ProjectReviewDetails({
                 ) : screenshots.length > 0 ? (
                   <div className="screenshots-grid">
                     {screenshots.map((screenshot, index) => {
-                      // Формируем URL для скриншота
+                      // Формируем URL для скриншота: /api/screenshots/{mbSiteId}/{filename}
+                      const filename = screenshot.split('/').pop() || screenshot;
                       const screenshotUrl = screenshot.startsWith('http') 
                         ? screenshot 
-                        : `/dashboard/api/screenshots/${screenshot}`;
+                        : mbSiteId ? `/api/screenshots/${mbSiteId}/${filename}` : screenshot;
                       
                       return (
                         <div key={index} className="screenshot-item">

@@ -52,6 +52,7 @@ export interface Translations {
   
   // Page cards
   edit: string;
+  openSourceSite: string;
   rating: string;
   tokens: string;
   noTitle: string;
@@ -90,6 +91,7 @@ export interface Translations {
   reviewer: string;
   projectName: string;
   reviewReady: string;
+  rememberFilter: string;
   
   // Errors
   tokenOrUuidNotSpecified: string;
@@ -120,6 +122,10 @@ export interface Translations {
   cancel: string;
   saving: string;
   save: string;
+  pageChecked: string;
+  markAsChecked: string;
+  checked: string;
+  reviewed: string;
 }
 
 const translations: Record<Language, Translations> = {
@@ -166,6 +172,7 @@ const translations: Record<Language, Translations> = {
     noAnalysis: 'Quality analysis has not been performed for this project yet.',
     noAnalysisDescription: 'Run migration with quality_analysis=true parameter to perform analysis.',
     edit: 'Edit',
+    openSourceSite: 'Open Source Site',
     rating: 'Rating:',
     tokens: 'Tokens',
     noTitle: 'No title',
@@ -200,6 +207,7 @@ const translations: Record<Language, Translations> = {
     reviewer: 'Reviewer',
     projectName: 'Name',
     reviewReady: 'Review ready',
+    rememberFilter: 'Remember filter',
     tokenOrUuidNotSpecified: 'Token or project UUID not specified',
     failedToLoadProjectDetails: 'Failed to load project details',
     errorLoadingData: 'Error loading data',
@@ -226,6 +234,10 @@ const translations: Record<Language, Translations> = {
     cancel: 'Cancel',
     saving: 'Saving...',
     save: 'Save',
+    pageChecked: 'Page checked',
+    markAsChecked: 'Mark as checked',
+    checked: 'Checked',
+    reviewed: 'Reviewed',
   },
   ro: {
     back: 'Înapoi',
@@ -270,6 +282,7 @@ const translations: Record<Language, Translations> = {
     noAnalysis: 'Analiza calității nu a fost efectuată încă pentru acest proiect.',
     noAnalysisDescription: 'Rulează migrarea cu parametrul quality_analysis=true pentru a efectua analiza.',
     edit: 'Editează',
+    openSourceSite: 'Deschide Site-ul Sursă',
     rating: 'Rating:',
     tokens: 'Tokenuri',
     noTitle: 'Fără titlu',
@@ -304,6 +317,7 @@ const translations: Record<Language, Translations> = {
     reviewer: 'Revizor',
     projectName: 'Nume',
     reviewReady: 'Revizuire finalizată',
+    rememberFilter: 'Reține filtrul',
     tokenOrUuidNotSpecified: 'Token sau UUID proiect nespecificat',
     failedToLoadProjectDetails: 'Nu s-au putut încărca detaliile proiectului',
     errorLoadingData: 'Eroare la încărcarea datelor',
@@ -330,6 +344,10 @@ const translations: Record<Language, Translations> = {
     cancel: 'Anulează',
     saving: 'Se salvează...',
     save: 'Salvează',
+    pageChecked: 'Pagină verificată',
+    markAsChecked: 'Marchează ca verificată',
+    checked: 'Verificat',
+    reviewed: 'Revizuit',
   },
   ru: {
     back: 'Назад',
@@ -374,6 +392,7 @@ const translations: Record<Language, Translations> = {
     noAnalysis: 'Анализ качества для этого проекта еще не выполнен.',
     noAnalysisDescription: 'Запустите миграцию с параметром quality_analysis=true для выполнения анализа.',
     edit: 'Редактировать',
+    openSourceSite: 'Открыть исходный сайт',
     rating: 'Рейтинг:',
     tokens: 'Токены',
     noTitle: 'Без названия',
@@ -408,6 +427,7 @@ const translations: Record<Language, Translations> = {
     reviewer: 'Ревьюер',
     projectName: 'Имя',
     reviewReady: 'Ревью готово',
+    rememberFilter: 'Запомнить фильтр',
     tokenOrUuidNotSpecified: 'Токен или UUID проекта не указан',
     failedToLoadProjectDetails: 'Не удалось загрузить детали проекта',
     errorLoadingData: 'Ошибка загрузки данных',
@@ -434,6 +454,10 @@ const translations: Record<Language, Translations> = {
     cancel: 'Отмена',
     saving: 'Сохранение...',
     save: 'Сохранить',
+    pageChecked: 'Страница проверена',
+    markAsChecked: 'Отметить как проверенную',
+    checked: 'Проверено',
+    reviewed: 'Проверено',
   },
 };
 

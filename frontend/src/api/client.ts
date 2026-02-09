@@ -73,6 +73,7 @@ export interface MigrationDetails {
   mapping: {
     brz_project_id: number;
     mb_project_uuid: string;
+    mb_site_id?: number;
     changes_json?: any;
     created_at: string;
     updated_at: string;
@@ -86,6 +87,7 @@ export interface MigrationDetails {
   };
   result_data?: any;
   status: 'pending' | 'in_progress' | 'success' | 'error' | 'completed';
+  mb_site_id?: number;
   brizy_project_domain?: string;
   mb_project_domain?: string;
   progress?: any;
@@ -502,18 +504,18 @@ export const api = {
         return response.data;
       },
 
-      getScreenshotUrl(filename: string): string {
-        return `${API_BASE_URL}/screenshots/${filename}`;
+      getScreenshotUrl(mbSiteId: string | number, filename: string): string {
+        return `${API_BASE_URL}/screenshots/${mbSiteId}/${filename}`;
       },
 
       /**
-       * Единый формат ссылки на скриншот: /api/screenshots/{filename}.
+       * Единый формат ссылки на скриншот: /api/screenshots/{mbSiteId}/{filename}.
        * Из любого пути (полный URL, путь с uuid, путь к файлу) извлекается только имя файла.
        */
-      getScreenshotSrc(path: string | null | undefined): string {
-        if (!path) return '';
+      getScreenshotSrc(mbSiteId: string | number | null | undefined, path: string | null | undefined): string {
+        if (!path || !mbSiteId) return '';
         const filename = path.replace(/\\/g, '/').split('/').pop() || path;
-        return `${API_BASE_URL}/screenshots/${filename}`;
+        return `${API_BASE_URL}/screenshots/${mbSiteId}/${filename}`;
       },
 
       async rebuildPage(migrationId: number, pageSlug: string): Promise<ApiResponse<any>> {

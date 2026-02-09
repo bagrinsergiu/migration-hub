@@ -3,6 +3,7 @@ import { useParams, useNavigate } from 'react-router-dom';
 import { getStatusConfig } from '../utils/status';
 import { formatDate, formatUUID } from '../utils/format';
 import { useTranslation } from '../hooks/useTranslation';
+import { api } from '../api/client';
 import LanguageSelector from './LanguageSelector';
 import ThemeToggle from './ThemeToggle';
 import './ProjectReviewPage.css';
@@ -34,6 +35,8 @@ export default function ProjectReviewPage() {
   const [savingReview, setSavingReview] = useState(false);
   const [startingReview, setStartingReview] = useState(false);
   const [projectReview, setProjectReview] = useState<any>(null);
+  const [checkedPages, setCheckedPages] = useState<Set<string>>(new Set());
+  const checkedPagesRef = useRef<Set<string>>(new Set());
 
   // Используем useRef для отслеживания, был ли уже сделан запрос
   const loadingRef = useRef<string | null>(null);
@@ -41,12 +44,14 @@ export default function ProjectReviewPage() {
   const abortControllerRef = useRef<AbortController | null>(null);
   const reviewJustSavedRef = useRef(false);
 
-  // Единый формат ссылки на скриншот: /api/screenshots/{filename} (как на /migrations/:id)
+  // Единый формат ссылки на скриншот: /api/screenshots/{mbSiteId}/{filename}
   const getScreenshotSrc = useCallback((path: string | null | undefined): string => {
     if (!path) return '';
+    const mbSiteId = details?.mb_site_id || details?.result_data?.mb_site_id;
+    if (!mbSiteId) return '';
     const filename = path.replace(/\\/g, '/').split('/').pop() || path;
-    return `/api/screenshots/${filename}`;
-  }, []);
+    return `/api/screenshots/${mbSiteId}/${filename}`;
+  }, [details]);
 
   useEffect(() => {
     if (!token || !brzProjectId) {
@@ -197,6 +202,116 @@ export default function ProjectReviewPage() {
       console.error('[ProjectReviewPage] Error loading review:', err);
     }
   }, [token, brzProjectId]);
+
+  // Функция для получения ключа localStorage
+  const getStorageKey = useCallback(() => {
+    if (!token || !brzProjectId) return null;
+    return `review_checked_pages_${token}_${brzProjectId}`;
+  }, [token, brzProjectId]);
+
+  // Обновляем ref при изменении checkedPages
+  useEffect(() => {
+    checkedPagesRef.current = checkedPages;
+  }, [checkedPages]);
+
+  // Загрузка проверенных страниц из localStorage при монтировании или изменении token/brzProjectId
+  useEffect(() => {
+    // Сначала очищаем состояние при смене проекта
+    const emptySet = new Set<string>();
+    setCheckedPages(emptySet);
+    checkedPagesRef.current = emptySet;
+    
+    if (!token || !brzProjectId) {
+      console.log('[ProjectReviewPage] Token or brzProjectId missing, cleared checked pages');
+      return;
+    }
+    
+    const storageKey = getStorageKey();
+    if (!storageKey) {
+      console.log('[ProjectReviewPage] Storage key is null, cleared checked pages');
+      return;
+    }
+    
+    console.log('[ProjectReviewPage] Loading checked pages for storage key:', storageKey);
+    
+    try {
+      const saved = localStorage.getItem(storageKey);
+      if (saved) {
+        const checkedPagesArray = JSON.parse(saved);
+        if (Array.isArray(checkedPagesArray) && checkedPagesArray.length > 0) {
+          const pagesSet = new Set(checkedPagesArray);
+          setCheckedPages(pagesSet);
+          checkedPagesRef.current = pagesSet;
+          console.log('[ProjectReviewPage] Loaded checked pages from localStorage for project:', storageKey, 'pages:', Array.from(pagesSet));
+        } else {
+          console.log('[ProjectReviewPage] No checked pages found in localStorage for project:', storageKey);
+        }
+      } else {
+        console.log('[ProjectReviewPage] No saved data in localStorage for project:', storageKey);
+      }
+    } catch (err) {
+      console.error('[ProjectReviewPage] Error loading checked pages:', err);
+    }
+  }, [token, brzProjectId, getStorageKey]);
+
+  // Сохранение при размонтировании компонента (на случай закрытия вкладки)
+  useEffect(() => {
+    return () => {
+      // Сохраняем при размонтировании, используя ref для получения актуального значения
+      const storageKey = getStorageKey();
+      if (storageKey && checkedPagesRef.current.size > 0) {
+        try {
+          localStorage.setItem(storageKey, JSON.stringify(Array.from(checkedPagesRef.current)));
+          console.log('[ProjectReviewPage] Saved checked pages on unmount:', Array.from(checkedPagesRef.current));
+        } catch (err) {
+          console.error('[ProjectReviewPage] Error saving checked pages on unmount:', err);
+        }
+      }
+    };
+  }, [getStorageKey]);
+
+  // Функция для переключения состояния проверки страницы
+  const togglePageChecked = useCallback((pageSlug: string, e: React.ChangeEvent<HTMLInputElement> | React.MouseEvent) => {
+    if (e) {
+      e.stopPropagation(); // Предотвращаем открытие модального окна при клике на чекбокс
+    }
+    if (!token || !brzProjectId) {
+      console.warn('[ProjectReviewPage] Cannot toggle: token or brzProjectId missing');
+      return;
+    }
+    
+    const storageKey = getStorageKey();
+    if (!storageKey) {
+      console.warn('[ProjectReviewPage] Cannot toggle: storage key is null');
+      return;
+    }
+    
+    setCheckedPages(prev => {
+      const newSet = new Set(prev);
+      const wasChecked = newSet.has(pageSlug);
+      
+      if (wasChecked) {
+        newSet.delete(pageSlug);
+        console.log('[ProjectReviewPage] Unchecked page:', pageSlug, 'for project:', storageKey);
+      } else {
+        newSet.add(pageSlug);
+        console.log('[ProjectReviewPage] Checked page:', pageSlug, 'for project:', storageKey);
+      }
+      
+      // Обновляем ref
+      checkedPagesRef.current = newSet;
+      
+      // Сохраняем сразу при изменении с правильным ключом проекта
+      try {
+        localStorage.setItem(storageKey, JSON.stringify(Array.from(newSet)));
+        console.log('[ProjectReviewPage] Saved checked pages to localStorage for project:', storageKey, 'pages:', Array.from(newSet));
+      } catch (err) {
+        console.error('[ProjectReviewPage] Error saving checked pages:', err);
+      }
+      
+      return newSet;
+    });
+  }, [token, brzProjectId, getStorageKey]);
 
   // Сохранение ревью
   const handleSaveReview = async () => {
@@ -1009,12 +1124,73 @@ export default function ProjectReviewPage() {
                               }
                             };
                             
+                            const pageSlug = report.page_slug || report.id || '';
+                            // Проверяем состояние только для текущего проекта
+                            // checkedPages уже содержит только страницы для текущего проекта (загружены из localStorage с правильным ключом)
+                            const isChecked = pageSlug ? checkedPages.has(pageSlug) : false;
+                            
+                            if (!pageSlug) {
+                              console.warn('[ProjectReviewPage] Page slug is missing for report:', report);
+                            }
+                            
                             return (
                               <div
                                 key={report.id || report.page_slug}
-                                className={`page-card ${selectedAnalysisPage === report.page_slug ? 'selected' : ''}`}
+                                className={`page-card ${selectedAnalysisPage === report.page_slug ? 'selected' : ''} ${isChecked ? 'checked' : ''}`}
                                 onClick={() => setSelectedAnalysisPage(report.page_slug)}
                               >
+                                <div style={{ display: 'flex', justifyContent: 'flex-end', alignItems: 'center', gap: '0.5rem', marginBottom: '0.75rem' }}>
+                                  <span style={{ 
+                                    fontSize: '0.875rem', 
+                                    color: isChecked ? '#198754' : 'var(--text-muted)', 
+                                    fontWeight: 500 
+                                  }}>
+                                    {t('reviewed')}
+                                  </span>
+                                  <label 
+                                    style={{ 
+                                      display: 'flex', 
+                                      alignItems: 'center', 
+                                      cursor: 'pointer',
+                                      position: 'relative',
+                                      zIndex: 10,
+                                      pointerEvents: 'auto'
+                                    }}
+                                    title={isChecked ? t('pageChecked') : t('markAsChecked')}
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                    }}
+                                  >
+                                    <input
+                                      type="checkbox"
+                                      checked={isChecked}
+                                      onChange={(e) => {
+                                        e.stopPropagation();
+                                        console.log('[ProjectReviewPage] Checkbox onChange triggered for pageSlug:', pageSlug, 'report:', report);
+                                        if (pageSlug) {
+                                          togglePageChecked(pageSlug, e);
+                                        } else {
+                                          console.error('[ProjectReviewPage] Cannot toggle: pageSlug is empty');
+                                        }
+                                      }}
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                      }}
+                                      onMouseDown={(e) => {
+                                        e.stopPropagation();
+                                      }}
+                                      style={{ 
+                                        width: '18px', 
+                                        height: '18px', 
+                                        cursor: 'pointer',
+                                        flexShrink: 0,
+                                        position: 'relative',
+                                        zIndex: 11,
+                                        pointerEvents: 'auto'
+                                      }}
+                                    />
+                                  </label>
+                                </div>
                                 <div className="page-card-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.75rem' }}>
                                   <h4 style={{ margin: 0, flex: 1 }}>{report.page_slug || t('noTitle')}</h4>
                                   <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
@@ -1044,22 +1220,79 @@ export default function ProjectReviewPage() {
                                     </span>
                                   </div>
                                 </div>
-                                <div className="page-card-body">
-                                  {report.collection_items_id && report.brz_project_id && (
-                                    <div style={{ marginBottom: '0.75rem' }}>
+                                <div className="page-card-body" style={{ marginTop: '0.5rem' }}>
+                                  <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem', marginBottom: '0.75rem' }}>
+                                    {report.collection_items_id && report.brz_project_id && (
                                       <a
                                         href={`https://admin.brizy.io/projects/${report.brz_project_id}/editor/page/${report.collection_items_id}`}
                                         target="_blank"
                                         rel="noopener noreferrer"
                                         className="btn btn-sm btn-primary"
-                                        style={{ textDecoration: 'none', display: 'inline-block' }}
+                                        style={{ 
+                                          textDecoration: 'none', 
+                                          display: 'inline-flex',
+                                          alignItems: 'center',
+                                          justifyContent: 'center',
+                                          gap: '0.375rem',
+                                          padding: '0.5rem 1rem',
+                                          borderRadius: '6px',
+                                          fontWeight: 500,
+                                          transition: 'all 0.2s',
+                                          boxShadow: '0 1px 3px rgba(0, 0, 0, 0.1)'
+                                        }}
                                         onClick={(e) => e.stopPropagation()}
                                         title={t('edit')}
+                                        onMouseEnter={(e) => {
+                                          e.currentTarget.style.transform = 'translateY(-1px)';
+                                          e.currentTarget.style.boxShadow = '0 2px 6px rgba(0, 0, 0, 0.15)';
+                                        }}
+                                        onMouseLeave={(e) => {
+                                          e.currentTarget.style.transform = 'translateY(0)';
+                                          e.currentTarget.style.boxShadow = '0 1px 3px rgba(0, 0, 0, 0.1)';
+                                        }}
                                       >
-                                        {t('edit')}
+                                        <span>✏️</span>
+                                        <span>{t('edit')}</span>
                                       </a>
-                                    </div>
-                                  )}
+                                    )}
+                                    {report.source_url && (
+                                      <a
+                                        href={report.source_url}
+                                        target="_blank"
+                                        rel="noopener noreferrer"
+                                        className="btn btn-sm btn-secondary"
+                                        style={{ 
+                                          textDecoration: 'none', 
+                                          display: 'inline-flex',
+                                          alignItems: 'center',
+                                          justifyContent: 'center',
+                                          gap: '0.375rem',
+                                          padding: '0.5rem 1rem',
+                                          borderRadius: '6px',
+                                          fontWeight: 500,
+                                          transition: 'all 0.2s',
+                                          border: '1px solid var(--border)',
+                                          backgroundColor: 'var(--bg)',
+                                          color: 'var(--text)'
+                                        }}
+                                        onClick={(e) => e.stopPropagation()}
+                                        title={t('openSourceSite')}
+                                        onMouseEnter={(e) => {
+                                          e.currentTarget.style.transform = 'translateY(-1px)';
+                                          e.currentTarget.style.boxShadow = '0 2px 6px rgba(0, 0, 0, 0.1)';
+                                          e.currentTarget.style.borderColor = 'var(--primary)';
+                                        }}
+                                        onMouseLeave={(e) => {
+                                          e.currentTarget.style.transform = 'translateY(0)';
+                                          e.currentTarget.style.boxShadow = 'none';
+                                          e.currentTarget.style.borderColor = 'var(--border)';
+                                        }}
+                                      >
+                                        <span>🌐</span>
+                                        <span>{t('openSourceSite')}</span>
+                                      </a>
+                                    )}
+                                  </div>
                                   {/* Скриншоты */}
                                   {(report.screenshots_path?.source || report.screenshots_path?.migrated) && (
                                     <div style={{ display: 'flex', gap: '0.5rem', marginBottom: '0.75rem', minHeight: '150px' }}>
@@ -1274,10 +1507,27 @@ function PageAnalysisDetailsModal({
   const [imagePosition, setImagePosition] = useState({ x: 0, y: 0 });
   const [isDragging, setIsDragging] = useState(false);
   const [dragStart, setDragStart] = useState({ x: 0, y: 0 });
+  const [mbSiteId, setMbSiteId] = useState<number | null>(null);
 
   useEffect(() => {
+    loadMigrationDetails();
     loadPageAnalysis();
   }, [token, brzProjectId, pageSlug]);
+
+  const loadMigrationDetails = async () => {
+    if (!brzProjectId) return;
+    try {
+      const response = await api.getMigrationDetails(parseInt(brzProjectId));
+      if (response.success && response.data) {
+        const siteId = response.data.mapping?.mb_site_id || response.data.mb_site_id;
+        if (siteId) {
+          setMbSiteId(siteId);
+        }
+      }
+    } catch (err) {
+      console.error('Failed to load migration details:', err);
+    }
+  };
 
   const loadPageAnalysis = async () => {
     try {
@@ -1288,6 +1538,10 @@ function PageAnalysisDetailsModal({
       
       if (data.success && data.data) {
         setReport(data.data);
+        // Пробуем получить mbSiteId из report, если он там есть
+        if (data.data.mb_site_id && !mbSiteId) {
+          setMbSiteId(data.data.mb_site_id);
+        }
       } else {
         setError(data.error || t('analysisNotFound'));
       }
@@ -1317,6 +1571,39 @@ function PageAnalysisDetailsModal({
     return '#dc3545';
   };
 
+  // Более надежное извлечение имени файла (обрабатывает и / и \)
+  const getFilename = useCallback((path: string | null | undefined): string | null => {
+    if (!path) return null;
+    // Если это URL, извлекаем имя файла из URL
+    if (path.startsWith('/api/')) {
+      const parts = path.split('/');
+      return parts[parts.length - 1] || null;
+    }
+    // Заменяем обратные слеши на прямые для единообразия
+    const normalizedPath = path.replace(/\\/g, '/');
+    // Извлекаем имя файла
+    const filename = normalizedPath.split('/').pop();
+    // Убираем возможные пробелы и лишние символы
+    return filename ? filename.trim() : null;
+  }, []);
+
+  // Единый формат: /api/screenshots/{mbSiteId}/{filename}
+  // Используем useCallback для пересчета URL при изменении mbSiteId
+  const getScreenshotUrl = useCallback((path: string | null | undefined): string | null => {
+    if (!path) return null;
+    const filename = getFilename(path);
+    if (!filename) return null;
+    
+    // Если mbSiteId загружен, используем его
+    if (mbSiteId) {
+      return `/api/screenshots/${mbSiteId}/${filename}`;
+    }
+    
+    // Fallback: если mbSiteId еще не загружен, возвращаем null
+    // URL будет обновлен после загрузки mbSiteId
+    return null;
+  }, [mbSiteId, getFilename]);
+
   if (loading) {
     return (
       <div className="page-analysis-modal" onClick={onClose}>
@@ -1345,31 +1632,8 @@ function PageAnalysisDetailsModal({
     );
   }
 
-  const sourceScreenshot = report.screenshots_path?.source;
-  const migratedScreenshot = report.screenshots_path?.migrated;
-  
-  // Единый формат: /api/screenshots/{filename}
-  const getScreenshotUrl = (path: string | null | undefined): string | null => {
-    if (!path) return null;
-    const filename = getFilename(path);
-    return filename ? `/api/screenshots/${filename}` : null;
-  };
-  
-  // Более надежное извлечение имени файла (обрабатывает и / и \)
-  const getFilename = (path: string | null | undefined): string | null => {
-    if (!path) return null;
-    // Если это URL, извлекаем имя файла из URL
-    if (path.startsWith('/api/')) {
-      const parts = path.split('/');
-      return parts[parts.length - 1] || null;
-    }
-    // Заменяем обратные слеши на прямые для единообразия
-    const normalizedPath = path.replace(/\\/g, '/');
-    // Извлекаем имя файла
-    const filename = normalizedPath.split('/').pop();
-    // Убираем возможные пробелы и лишние символы
-    return filename ? filename.trim() : null;
-  };
+  const sourceScreenshot = report?.screenshots_path?.source;
+  const migratedScreenshot = report?.screenshots_path?.migrated;
   
   const sourceUrl = getScreenshotUrl(sourceScreenshot);
   const migratedUrl = getScreenshotUrl(migratedScreenshot);
