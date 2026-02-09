@@ -15,7 +15,6 @@ export default function WaveDetails() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [autoRefreshing, setAutoRefreshing] = useState(false);
-  const [restarting, setRestarting] = useState<string | null>(null);
   const [showLogs, setShowLogs] = useState<string | null>(null);
   const [logs, setLogs] = useState<string | null>(null);
   const [loadingLogs, setLoadingLogs] = useState(false);
@@ -24,7 +23,6 @@ export default function WaveDetails() {
   const [waveLogs, setWaveLogs] = useState<string | null>(null);
   const [loadingWaveLogs, setLoadingWaveLogs] = useState(false);
   const waveLogsContentRef = useRef<HTMLDivElement>(null);
-  const [removingLock, setRemovingLock] = useState<string | null>(null);
   const [restartingAll, setRestartingAll] = useState(false);
   const [resettingWave, setResettingWave] = useState(false);
   const [restartWithQualityAnalysis, setRestartWithQualityAnalysis] = useState(false);
@@ -101,53 +99,6 @@ export default function WaveDetails() {
     return () => clearInterval(interval);
   }, [details, id, error]);
 
-  const handleRestartMigration = async (mbUuid: string, withQualityAnalysis: boolean) => {
-    if (!id) return;
-    try {
-      setRestarting(mbUuid);
-      setError(null);
-      const response = await api.restartWaveMigration(id, mbUuid, { quality_analysis: withQualityAnalysis });
-      if (response.success) {
-        const msg = (response.data as any)?.message || 'Миграция перезапущена';
-        alert(msg);
-        await loadDetails();
-      } else {
-        setError(response.error || 'Ошибка перезапуска миграции');
-      }
-    } catch (err: any) {
-      setError(err.message || 'Ошибка перезапуска миграции');
-    } finally {
-      setRestarting(null);
-    }
-  };
-
-  const handleRemoveLock = async (mbUuid: string) => {
-    if (!id) return;
-    
-    if (!confirm('Вы уверены, что хотите удалить lock-файл? Это разблокирует миграцию для повторного запуска.')) {
-      return;
-    }
-    
-    try {
-      setRemovingLock(mbUuid);
-      setError(null);
-      
-      const response = await api.removeWaveMigrationLock(id, mbUuid);
-      
-      if (response.success) {
-        const message = (response.data as any)?.message || 'Lock-файл успешно удален';
-        alert(message);
-        // Перезагружаем детали
-        await loadDetails();
-      } else {
-        setError(response.error || 'Ошибка удаления lock-файла');
-      }
-    } catch (err: any) {
-      setError(err.message || 'Ошибка удаления lock-файла');
-    } finally {
-      setRemovingLock(null);
-    }
-  };
 
 
   const loadLogs = useCallback(async (mbUuid: string) => {
@@ -263,18 +214,6 @@ export default function WaveDetails() {
     await loadWaveLogs();
   };
 
-  const handleShowLogs = async (mbUuid: string) => {
-    if (!id) return;
-    
-    if (showLogs === mbUuid) {
-      setShowLogs(null);
-      setLogs(null);
-      return;
-    }
-
-    setShowLogs(mbUuid);
-    await loadLogs(mbUuid);
-  };
 
   // Автообновление логов для миграций в процессе
   useEffect(() => {
