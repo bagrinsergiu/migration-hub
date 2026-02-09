@@ -1254,7 +1254,7 @@ export default function ProjectReviewPage() {
 function PageAnalysisDetailsModal({ 
   token, 
   brzProjectId,
-  mbUuid, 
+  mbUuid: _mbUuid, 
   pageSlug, 
   onClose 
 }: { 
@@ -1373,8 +1373,6 @@ function PageAnalysisDetailsModal({
   
   const sourceUrl = getScreenshotUrl(sourceScreenshot);
   const migratedUrl = getScreenshotUrl(migratedScreenshot);
-  const sourceFilename = getFilename(sourceScreenshot);
-  const migratedFilename = getFilename(migratedScreenshot);
 
   return (
     <div className="page-analysis-modal" onClick={onClose}>

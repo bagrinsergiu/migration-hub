@@ -82,7 +82,7 @@ class ScreenshotService
         return [
             'filename' => $filename,
             'path' => $filePath,
-            'url' => '/api/screenshots/' . $mbUuid . '/' . $filename,
+            'url' => '/api/screenshots/' . $filename,
             'size' => filesize($filePath),
             'type' => $type
         ];
@@ -127,11 +127,91 @@ class ScreenshotService
         return [
             'filename' => $screenshot['filename'],
             'path' => $filePath,
-            'url' => '/api/screenshots/' . $mbUuid . '/' . $screenshot['filename'],
+            'url' => '/api/screenshots/' . $screenshot['filename'],
             'size' => filesize($filePath),
             'type' => $type,
             'created_at' => $screenshot['created_at']
         ];
+    }
+
+    /**
+     * Получить файл скриншота только по имени файла (без mbUuid)
+     * 
+     * @param string $filename Имя файла
+     * @return string|null Путь к файлу или null, если не найден
+     */
+    public function getScreenshotFileByFilename(string $filename): ?string
+    {
+        $filename = basename($filename);
+        
+        // Сначала ищем в БД по имени файла
+        $db = $this->dbService->getWriteConnection();
+        $screenshot = $db->find(
+            'SELECT file_path 
+             FROM dashboard_screenshots 
+             WHERE filename = ? 
+             ORDER BY created_at DESC 
+             LIMIT 1',
+            [$filename]
+        );
+        
+        if ($screenshot && isset($screenshot['file_path'])) {
+            $filePath = $screenshot['file_path'];
+            if (file_exists($filePath) && is_file($filePath)) {
+                return $filePath;
+            }
+        }
+        
+        // Если не нашли в БД, ищем файл во всех поддиректориях var/screenshots/
+        if (is_dir($this->screenshotsDir)) {
+            $uuidDirs = glob($this->screenshotsDir . '*', GLOB_ONLYDIR) ?: [];
+            foreach ($uuidDirs as $dir) {
+                $potentialPath = $dir . '/' . $filename;
+                if (file_exists($potentialPath) && is_file($potentialPath)) {
+                    return $potentialPath;
+                }
+                
+                // Пробуем то же имя с другим расширением
+                $baseWithoutExt = pathinfo($filename, PATHINFO_FILENAME);
+                $altMatches = glob($dir . '/' . $baseWithoutExt . '.*');
+                if (!empty($altMatches) && file_exists($altMatches[0]) && is_file($altMatches[0])) {
+                    return $altMatches[0];
+                }
+            }
+        }
+        
+        // Также ищем в var/tmp/ (для обратной совместимости)
+        $tmpDir = $this->projectRoot . '/var/tmp/';
+        if (is_dir($tmpDir)) {
+            // Ищем в var/tmp/project_*/
+            $projectDirs = glob($tmpDir . 'project_*', GLOB_ONLYDIR) ?: [];
+            foreach ($projectDirs as $dir) {
+                $potentialPath = $dir . '/' . $filename;
+                if (file_exists($potentialPath) && is_file($potentialPath)) {
+                    return $potentialPath;
+                }
+                
+                $baseWithoutExt = pathinfo($filename, PATHINFO_FILENAME);
+                $altMatches = glob($dir . '/' . $baseWithoutExt . '.*');
+                if (!empty($altMatches) && file_exists($altMatches[0]) && is_file($altMatches[0])) {
+                    return $altMatches[0];
+                }
+            }
+            
+            // Ищем в корне var/tmp/
+            $rootPath = $tmpDir . $filename;
+            if (file_exists($rootPath) && is_file($rootPath)) {
+                return $rootPath;
+            }
+            
+            $baseWithoutExt = pathinfo($filename, PATHINFO_FILENAME);
+            $altMatches = glob($tmpDir . $baseWithoutExt . '.*');
+            if (!empty($altMatches) && file_exists($altMatches[0]) && is_file($altMatches[0])) {
+                return $altMatches[0];
+            }
+        }
+        
+        return null;
     }
 
     /**
