@@ -156,6 +156,29 @@ class QualityAnalysisController
                 ], 404);
             }
             
+            // Получаем mbSiteId из миграции
+            $migrationService = new \Dashboard\Services\MigrationService();
+            $migrationDetails = $migrationService->getMigrationDetails($migrationId);
+            $mbSiteId = $migrationDetails['mapping']['mb_site_id'] ?? null;
+            
+            if (!$mbSiteId) {
+                // Пробуем получить из таблицы migrations
+                $dbService = new \Dashboard\Services\DatabaseService();
+                $db = $dbService->getWriteConnection();
+                $migration = $db->find(
+                    'SELECT mb_site_id FROM migrations WHERE brz_project_id = ? LIMIT 1',
+                    [$migrationId]
+                );
+                $mbSiteId = $migration['mb_site_id'] ?? null;
+            }
+            
+            if (!$mbSiteId) {
+                return new JsonResponse([
+                    'success' => false,
+                    'error' => 'Не удалось определить Site ID проекта'
+                ], 404);
+            }
+            
             $screenshots = $report['screenshots_path'];
             $screenshotPath = null;
             
@@ -183,7 +206,7 @@ class QualityAnalysisController
                 'success' => true,
                 'data' => [
                     'path' => $screenshotPath,
-                    'url' => '/dashboard/api/screenshots/' . basename($screenshotPath),
+                    'url' => '/api/screenshots/' . $mbSiteId . '/' . basename($screenshotPath),
                     'exists' => true,
                     'size' => filesize($screenshotPath)
                 ]

@@ -2249,10 +2249,26 @@ function ArchivedPageAnalysisDetails({ migrationId, pageSlug, onClose }: { migra
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<'overview' | 'screenshots' | 'issues'>('overview');
+  const [mbSiteId, setMbSiteId] = useState<number | null>(null);
 
   useEffect(() => {
+    loadMigrationDetails();
     loadPageAnalysis();
   }, [migrationId, pageSlug]);
+
+  const loadMigrationDetails = async () => {
+    try {
+      const response = await api.getMigrationDetails(migrationId);
+      if (response.success && response.data) {
+        const siteId = response.data.mapping?.mb_site_id || response.data.mb_site_id;
+        if (siteId) {
+          setMbSiteId(siteId);
+        }
+      }
+    } catch (err) {
+      console.error('Failed to load migration details:', err);
+    }
+  };
 
   const loadPageAnalysis = async () => {
     try {
@@ -2466,7 +2482,7 @@ function ArchivedPageAnalysisDetails({ migrationId, pageSlug, onClose }: { migra
                   <div className="screenshot-item">
                     <h4>Исходная страница</h4>
                     <img
-                      src={api.getScreenshotSrc(sourceScreenshot)}
+                      src={api.getScreenshotSrc(mbSiteId, sourceScreenshot)}
                       alt="Source screenshot"
                       className="screenshot-image"
                       onError={(e) => {
@@ -2480,7 +2496,7 @@ function ArchivedPageAnalysisDetails({ migrationId, pageSlug, onClose }: { migra
                   <div className="screenshot-item">
                     <h4>Мигрированная страница</h4>
                     <img
-                      src={api.getScreenshotSrc(migratedScreenshot)}
+                      src={api.getScreenshotSrc(mbSiteId, migratedScreenshot)}
                       alt="Migrated screenshot"
                       className="screenshot-image"
                       onError={(e) => {

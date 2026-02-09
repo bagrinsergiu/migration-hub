@@ -19,12 +19,68 @@ export default function WaveReview() {
   const [error, setError] = useState<string | null>(null);
   const [searchTerm, setSearchTerm] = useState('');
   const [statusFilter, setStatusFilter] = useState<string>('all');
+  const [rememberFilter, setRememberFilter] = useState<boolean>(false);
   const [refreshTrigger, setRefreshTrigger] = useState(0);
 
   // Используем useRef для отслеживания, был ли уже сделан запрос для этого токена
   const loadingRef = useRef<string | null>(null);
   const loadedRef = useRef<string | null>(null);
   const abortControllerRef = useRef<AbortController | null>(null);
+
+  // Загрузка сохраненных фильтров при монтировании
+  useEffect(() => {
+    if (!token) return;
+    
+    const storageKey = `review_filter_${token}`;
+    const savedFilters = localStorage.getItem(storageKey);
+    
+    if (savedFilters) {
+      try {
+        const filters = JSON.parse(savedFilters);
+        if (filters.searchTerm !== undefined) {
+          setSearchTerm(filters.searchTerm);
+        }
+        if (filters.statusFilter !== undefined) {
+          setStatusFilter(filters.statusFilter);
+        }
+        if (filters.rememberFilter !== undefined) {
+          setRememberFilter(filters.rememberFilter);
+        }
+      } catch (e) {
+        console.error('Error loading saved filters:', e);
+      }
+    }
+  }, [token]);
+
+  // Сохранение фильтров при изменении (если галочка включена)
+  useEffect(() => {
+    if (!token || !rememberFilter) return;
+    
+    const storageKey = `review_filter_${token}`;
+    const filters = {
+      searchTerm,
+      statusFilter,
+      rememberFilter,
+    };
+    
+    try {
+      localStorage.setItem(storageKey, JSON.stringify(filters));
+    } catch (e) {
+      console.error('Error saving filters:', e);
+    }
+  }, [token, searchTerm, statusFilter, rememberFilter]);
+
+  // Очистка сохраненных фильтров, если галочка выключена
+  useEffect(() => {
+    if (!token || rememberFilter) return;
+    
+    const storageKey = `review_filter_${token}`;
+    try {
+      localStorage.removeItem(storageKey);
+    } catch (e) {
+      console.error('Error removing filters:', e);
+    }
+  }, [token, rememberFilter]);
 
   // При возврате на вкладку — обновляем список (прогресс и "Review ready")
   useEffect(() => {
@@ -338,6 +394,18 @@ export default function WaveReview() {
                     );
                   })}
                 </select>
+              </div>
+              <div className="filter-group">
+                <label htmlFor="remember-filter" style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer' }}>
+                  <input
+                    id="remember-filter"
+                    type="checkbox"
+                    checked={rememberFilter}
+                    onChange={(e) => setRememberFilter(e.target.checked)}
+                    style={{ cursor: 'pointer' }}
+                  />
+                  <span>{t('rememberFilter')}</span>
+                </label>
               </div>
             </div>
           </div>

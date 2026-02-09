@@ -836,6 +836,12 @@ return function (array $context, Request $request) use ($debugMode): Response {
                         $report['screenshots_path'] = array_merge($report['screenshots_path'], $screenshotsPath);
                     }
                     
+                    // Добавляем mb_site_id в ответ для использования на frontend
+                    $mbSiteId = $migrationDetails['mapping']['mb_site_id'] ?? $migrationDetails['mb_site_id'] ?? null;
+                    if ($mbSiteId) {
+                        $report['mb_site_id'] = $mbSiteId;
+                    }
+                    
                     return new JsonResponse([
                         'success' => true,
                         'data' => $report
@@ -993,15 +999,16 @@ return function (array $context, Request $request) use ($debugMode): Response {
         }
 
 
-        // Прямой доступ к файлам скриншотов (старый формат без /api/)
+        // Прямой доступ к файлам скриншотов через /api/screenshots/{mbSiteId}/{filename}
+        // Этот эндпоинт обрабатывает запросы, когда nginx не может отдать файл напрямую
         if (preg_match('#^/screenshots/([^/]+)/(.+)$#', $apiPath, $matches)) {
             if ($request->getMethod() === 'GET') {
                 try {
-                    $mbUuid = $matches[1];
+                    $mbSiteId = $matches[1];
                     $filename = basename($matches[2]);
                     
                     $screenshotService = new \Dashboard\Services\ScreenshotService();
-                    $filePath = $screenshotService->getScreenshotFile($mbUuid, $filename);
+                    $filePath = $screenshotService->getScreenshotFileBySiteId($mbSiteId, $filename);
                     
                     if (!$filePath || !file_exists($filePath)) {
                         http_response_code(404);
@@ -1427,56 +1434,6 @@ return function (array $context, Request $request) use ($debugMode): Response {
             }
         }
 
-        // Публичный доступ к скриншотам через /api/screenshots/ (без авторизации)
-        // Формат: /api/screenshots/{filename}
-        // Примечание: /api убирается из пути на строке 212, поэтому проверяем /screenshots/
-        if (preg_match('#^/screenshots/(.+)$#', $apiPath, $matches)) {
-            if ($request->getMethod() === 'GET') {
-                try {
-                    $filename = basename($matches[1]);
-                    
-                    $screenshotService = new \Dashboard\Services\ScreenshotService();
-                    $filePath = $screenshotService->getScreenshotFileByFilename($filename);
-                    
-                    if (!$filePath) {
-                        error_log("Screenshot not found: filename=$filename");
-                        return new JsonResponse([
-                            'success' => false,
-                            'error' => 'Файл скриншота не найден',
-                            'debug' => [
-                                'filename' => $filename
-                            ]
-                        ], 404, ['Content-Type' => 'application/json; charset=utf-8']);
-                    }
-                    
-                    if (!file_exists($filePath)) {
-                        error_log("Screenshot file does not exist: $filePath (filename=$filename)");
-                        return new JsonResponse([
-                            'success' => false,
-                            'error' => 'Файл скриншота не найден по пути: ' . $filePath
-                        ], 404, ['Content-Type' => 'application/json; charset=utf-8']);
-                    }
-                    
-                    // Определяем MIME тип
-                    $mimeType = mime_content_type($filePath);
-                    if (!$mimeType) {
-                        $mimeType = 'image/png'; // По умолчанию PNG
-                    }
-                    
-                    $response = new Response(file_get_contents($filePath), 200);
-                    $response->headers->set('Content-Type', $mimeType);
-                    $response->headers->set('Content-Length', filesize($filePath));
-                    $response->headers->set('Cache-Control', 'public, max-age=3600');
-                    return $response;
-                } catch (\Throwable $e) {
-                    error_log("Error serving screenshot file: " . $e->getMessage());
-                    return new JsonResponse([
-                        'success' => false,
-                        'error' => 'Ошибка при получении файла скриншота'
-                    ], 500, ['Content-Type' => 'application/json; charset=utf-8']);
-                }
-            }
-        }
 
         // Проверка авторизации для защищенных endpoints
         $authMiddleware = new AuthMiddleware();

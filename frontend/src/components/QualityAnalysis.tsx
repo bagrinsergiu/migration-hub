@@ -12,12 +12,30 @@ export default function QualityAnalysis() {
   const [error, setError] = useState<string | null>(null);
   const [selectedPage, setSelectedPage] = useState<string | null>(null);
   const [severityFilter, setSeverityFilter] = useState<string | null>(null);
+  const [mbSiteId, setMbSiteId] = useState<number | null>(null);
 
   useEffect(() => {
     if (id) {
+      loadMigrationDetails();
       loadAnalysis();
     }
   }, [id]);
+
+  const loadMigrationDetails = async () => {
+    if (!id) return;
+    try {
+      const response = await api.getMigrationDetails(parseInt(id));
+      if (response.success && response.data) {
+        const siteId = response.data.mapping?.mb_site_id || response.data.mb_site_id;
+        if (siteId) {
+          setMbSiteId(siteId);
+        }
+      }
+    } catch (err) {
+      // Игнорируем ошибку, mbSiteId останется null
+      console.error('Failed to load migration details:', err);
+    }
+  };
 
   const loadAnalysis = async () => {
     if (!id) return;
@@ -334,7 +352,7 @@ export default function QualityAnalysis() {
                       return sourceFilename ? (
                         <div style={{ flex: 1, border: '1px solid #e0e0e0', borderRadius: '4px', overflow: 'hidden', backgroundColor: '#f9fafb', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
                           <img 
-                            src={api.getScreenshotSrc(report.screenshots_path.source)}
+                            src={api.getScreenshotSrc(mbSiteId, report.screenshots_path.source)}
                             alt="Исходная страница"
                             style={{ width: '100%', height: '100%', objectFit: 'contain', display: 'block', maxHeight: '150px' }}
                             onError={(e) => {
@@ -349,7 +367,7 @@ export default function QualityAnalysis() {
                       return migratedFilename ? (
                         <div style={{ flex: 1, border: '1px solid #e0e0e0', borderRadius: '4px', overflow: 'hidden', backgroundColor: '#f9fafb', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
                           <img 
-                            src={api.getScreenshotSrc(report.screenshots_path.migrated)}
+                            src={api.getScreenshotSrc(mbSiteId, report.screenshots_path.migrated)}
                             alt="Мигрированная страница"
                             style={{ width: '100%', height: '100%', objectFit: 'contain', display: 'block', maxHeight: '150px' }}
                             onError={(e) => {
@@ -406,10 +424,27 @@ export function PageAnalysisDetails({ migrationId, pageSlug, onClose }: PageAnal
   const [rebuilding, setRebuilding] = useState(false);
   const [rebuildingNoAnalysis, setRebuildingNoAnalysis] = useState(false);
   const [reanalyzing, setReanalyzing] = useState(false);
+  const [mbSiteId, setMbSiteId] = useState<number | null>(null);
 
   useEffect(() => {
+    loadMigrationDetails();
     loadPageAnalysis();
   }, [migrationId, pageSlug]);
+
+  const loadMigrationDetails = async () => {
+    try {
+      const response = await api.getMigrationDetails(migrationId);
+      if (response.success && response.data) {
+        const siteId = response.data.mapping?.mb_site_id || response.data.mb_site_id;
+        if (siteId) {
+          setMbSiteId(siteId);
+        }
+      }
+    } catch (err) {
+      // Игнорируем ошибку, mbSiteId останется null
+      console.error('Failed to load migration details:', err);
+    }
+  };
 
   const loadPageAnalysis = async () => {
     try {
@@ -650,7 +685,7 @@ export function PageAnalysisDetails({ migrationId, pageSlug, onClose }: PageAnal
                   <div className="screenshot-item">
                     <h4>Исходная страница</h4>
                     <img
-                      src={api.getScreenshotSrc(sourceScreenshot)}
+                      src={api.getScreenshotSrc(mbSiteId, sourceScreenshot)}
                       alt="Source screenshot"
                       className="screenshot-image"
                       onError={(e) => {
@@ -664,7 +699,7 @@ export function PageAnalysisDetails({ migrationId, pageSlug, onClose }: PageAnal
                   <div className="screenshot-item">
                     <h4>Мигрированная страница</h4>
                     <img
-                      src={api.getScreenshotSrc(migratedScreenshot)}
+                      src={api.getScreenshotSrc(mbSiteId, migratedScreenshot)}
                       alt="Migrated screenshot"
                       className="screenshot-image"
                       onError={(e) => {

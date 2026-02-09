@@ -431,8 +431,23 @@ class MigrationService
             }
         }
         
+        // Получаем mb_site_id из таблицы migrations
+        $mbSiteId = null;
+        try {
+            $db = $this->dbService->getWriteConnection();
+            $migration = $db->find(
+                'SELECT mb_site_id FROM migrations WHERE mb_project_uuid = ? OR brz_project_id = ? LIMIT 1',
+                [$mapping['mb_project_uuid'], $brzProjectId]
+            );
+            if ($migration && isset($migration['mb_site_id']) && $migration['mb_site_id']) {
+                $mbSiteId = (int)$migration['mb_site_id'];
+            }
+        } catch (\Throwable $e) {
+            error_log("Error getting mb_site_id in getMigrationDetails: " . $e->getMessage());
+        }
+        
         return [
-            'mapping' => $mapping,
+            'mapping' => array_merge($mapping, $mbSiteId ? ['mb_site_id' => $mbSiteId] : []),
             'result' => $result ? [
                 'migration_uuid' => $result['migration_uuid'] ?? null,
                 'result_json' => $resultData,
@@ -440,6 +455,7 @@ class MigrationService
             'result_data' => $migrationValue, // Добавляем извлеченные данные из value
             'status' => $status,
             'migration_uuid' => $result['migration_uuid'] ?? null,
+            'mb_site_id' => $mbSiteId ?? $migrationValue['mb_site_id'] ?? $resultData['mb_site_id'] ?? $changesJson['mb_site_id'] ?? null,
             'brizy_project_domain' => $migrationValue['brizy_project_domain'] ?? $resultData['brizy_project_domain'] ?? $changesJson['brizy_project_domain'] ?? null,
             'mb_project_domain' => $migrationValue['mb_project_domain'] ?? $resultData['mb_project_domain'] ?? $changesJson['mb_project_domain'] ?? $mapping['mb_project_domain'] ?? null,
             'progress' => $migrationValue['progress'] ?? $resultData['progress'] ?? null,
