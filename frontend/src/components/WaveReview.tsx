@@ -442,7 +442,7 @@ export default function WaveReview() {
                     
                     return (
                       <tr 
-                        key={migration.mb_project_uuid || index}
+                        key={migration.mb_project_uuid ? `review-${migration.mb_project_uuid}-${index}` : `review-row-${index}`}
                         className={!hasAccess ? 'project-disabled' : ''}
                       >
                         <td>

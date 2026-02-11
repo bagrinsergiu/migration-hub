@@ -47,25 +47,67 @@ class MigrationService
             }
         }
 
+        // Ключи, уже покрытые записями из migrations (чтобы потом добавить только из migration_result_list)
+        $mappingKeys = [];
+        foreach ($mappings as $mapping) {
+            $mappingKeys[$mapping['mb_project_uuid'] . '|' . $mapping['brz_project_id']] = true;
+        }
+
         $migrations = [];
         foreach ($mappings as $mapping) {
             $mbUuid = $mapping['mb_project_uuid'];
-            $brzId = $mapping['brz_project_id'];
+            $brzId = (int)$mapping['brz_project_id'];
             $result = $resultIndex[$mbUuid . '|' . $brzId] ?? null;
 
             $resultData = $result ? json_decode($result['result_json'] ?? '{}', true) : null;
-            
+            $changesJson = isset($mapping['changes_json']) ? (is_string($mapping['changes_json']) ? json_decode($mapping['changes_json'], true) : $mapping['changes_json']) : [];
+            if (!is_array($changesJson)) {
+                $changesJson = [];
+            }
             $migration = [
                 'id' => $brzId,
                 'mb_project_uuid' => $mbUuid,
                 'brz_project_id' => $brzId,
-                'created_at' => $mapping['created_at'],
-                'updated_at' => $mapping['updated_at'],
-                'changes_json' => json_decode($mapping['changes_json'] ?? '{}', true),
+                'created_at' => $mapping['created_at'] ?? null,
+                'updated_at' => $mapping['updated_at'] ?? null,
+                'changes_json' => $changesJson,
+                'status' => $this->determineStatus($result, array_merge($mapping, ['changes_json' => $changesJson])),
+                'result' => $resultData,
+                'migration_uuid' => $result['migration_uuid'] ?? $mapping['migration_uuid'] ?? null,
+                // Дополнительные поля из результата миграции
+                'brizy_project_domain' => $resultData['brizy_project_domain'] ?? $mapping['brizy_project_domain'] ?? null,
+                'mb_project_domain' => $resultData['mb_project_domain'] ?? $mapping['mb_project_domain'] ?? null,
+                'mb_site_id' => $resultData['mb_site_id'] ?? $mapping['mb_site_id'] ?? null,
+                'mb_product_name' => $resultData['mb_product_name'] ?? $mapping['mb_product_name'] ?? null,
+                'theme' => $resultData['theme'] ?? $mapping['theme'] ?? null,
+                'progress' => $resultData['progress'] ?? null,
+                'migration_id' => $resultData['migration_id'] ?? $mapping['migration_id'] ?? null,
+                'date' => $resultData['date'] ?? $mapping['migration_date'] ?? null,
+            ];
+
+            if ($this->matchesFilters($migration, $filters)) {
+                $migrations[] = $migration;
+            }
+        }
+
+        // Добавляем миграции, которые есть только в migration_result_list (например запущенные до появления записи в migrations)
+        foreach ($resultIndex as $key => $result) {
+            if (isset($mappingKeys[$key])) {
+                continue;
+            }
+            $mbUuid = $result['mb_project_uuid'];
+            $brzId = (int)$result['brz_project_id'];
+            $resultData = json_decode($result['result_json'] ?? '{}', true) ?: [];
+            $migration = [
+                'id' => $brzId,
+                'mb_project_uuid' => $mbUuid,
+                'brz_project_id' => $brzId,
+                'created_at' => $result['created_at'] ?? null,
+                'updated_at' => $result['updated_at'] ?? null,
+                'changes_json' => [],
                 'status' => $this->determineStatus($result),
                 'result' => $resultData,
                 'migration_uuid' => $result['migration_uuid'] ?? null,
-                // Дополнительные поля из результата миграции
                 'brizy_project_domain' => $resultData['brizy_project_domain'] ?? null,
                 'mb_project_domain' => $resultData['mb_project_domain'] ?? null,
                 'mb_site_id' => $resultData['mb_site_id'] ?? null,
@@ -75,11 +117,25 @@ class MigrationService
                 'migration_id' => $resultData['migration_id'] ?? null,
                 'date' => $resultData['date'] ?? null,
             ];
-
-            // Применяем фильтры
             if ($this->matchesFilters($migration, $filters)) {
                 $migrations[] = $migration;
             }
+        }
+
+        // Сортируем по updated_at DESC, затем по created_at DESC
+        usort($migrations, function ($a, $b) {
+            $ua = $a['updated_at'] ?? $a['created_at'] ?? '';
+            $ub = $b['updated_at'] ?? $b['created_at'] ?? '';
+            if ($ua !== $ub) {
+                return strcmp($ub, $ua);
+            }
+            $ca = $a['created_at'] ?? '';
+            $cb = $b['created_at'] ?? '';
+            return strcmp($cb, $ca);
+        });
+
+        if ($limit !== null && $limit > 0 && count($migrations) > $limit) {
+            $migrations = array_slice($migrations, 0, $limit);
         }
 
         return $migrations;
@@ -219,8 +275,34 @@ class MigrationService
             
             $migrationData = $result['data'] ?? [];
             
-            // Если миграция успешно запущена (даже с предупреждением о подключении), возвращаем успех
+            // Если миграция успешно запущена (даже с предупреждением о подключении), создаём запись в migrations,
+            // чтобы GET /api/migrations/:id и подстраницы (webhook-info, process) находили миграцию и не отдавали 404.
             if ($result['success'] && isset($result['data']['status']) && $result['data']['status'] === 'in_progress') {
+                $migrationUuid = (string)(time() . random_int(100, 999));
+                try {
+                    $this->dbService->saveMigration([
+                        'migration_uuid' => $migrationUuid,
+                        'brz_project_id' => $brzProjectId,
+                        'mb_project_uuid' => $mbProjectUuid,
+                        'status' => 'in_progress',
+                        'started_at' => date('Y-m-d H:i:s'),
+                        'mb_site_id' => $params['mb_site_id'] ?? null,
+                        'wave_id' => $params['wave_id'] ?? null,
+                        'result_json' => json_encode($migrationData),
+                    ]);
+                    // Чтобы вебхук и опрос статуса могли обновлять ту же запись, создаём черновик в migration_result_list
+                    $this->dbService->upsertMigrationResultByBrzAndMb(
+                        $brzProjectId,
+                        $mbProjectUuid,
+                        [
+                            'migration_uuid' => $migrationUuid,
+                            'brizy_project_domain' => $migrationData['brizy_project_domain'] ?? '',
+                            'result_json' => json_encode(array_merge($migrationData, ['status' => 'in_progress'])),
+                        ]
+                    );
+                } catch (Exception $e) {
+                    error_log('[MIG] MigrationService::runMigration — не удалось создать запись при старте: ' . $e->getMessage());
+                }
                 return $result;
             }
             
@@ -586,6 +668,27 @@ class MigrationService
         }
         
         return $details;
+    }
+
+    /**
+     * Добавить стороннюю миграцию в волну (привязка по brz_project_id).
+     *
+     * @param int $brzProjectId Brizy Project ID миграции
+     * @param string $waveId ID волны
+     * @return array ['success' => bool, 'error' => string|null, 'updated' => int]
+     */
+    public function addMigrationToWave(int $brzProjectId, string $waveId): array
+    {
+        $mapping = $this->dbService->getMigrationById($brzProjectId);
+        if (!$mapping) {
+            return ['success' => false, 'error' => 'Миграция не найдена', 'updated' => 0];
+        }
+        $wave = $this->dbService->getWave($waveId);
+        if (!$wave) {
+            return ['success' => false, 'error' => 'Волна не найдена', 'updated' => 0];
+        }
+        $updated = $this->dbService->addMigrationToWave($brzProjectId, $waveId);
+        return ['success' => true, 'error' => null, 'updated' => $updated];
     }
 
     /**

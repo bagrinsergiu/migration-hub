@@ -47,6 +47,10 @@ export default function MigrationDetails() {
   const logsContentRef = useRef<HTMLDivElement>(null);
   const [webhookInfo, setWebhookInfo] = useState<any | null>(null);
   const [loadingWebhookInfo, setLoadingWebhookInfo] = useState(false);
+  const [wavesList, setWavesList] = useState<{ id: string; name: string }[]>([]);
+  const [selectedWaveId, setSelectedWaveId] = useState<string>('');
+  const [addingToWave, setAddingToWave] = useState(false);
+  const [addToWaveError, setAddToWaveError] = useState<string | null>(null);
 
   // Вспомогательная функция для безопасного парсинга changes_json
   const safeParseChangesJson = (changesJsonValue: any): any => {
@@ -90,6 +94,21 @@ export default function MigrationDetails() {
       console.error('Ошибка загрузки настроек:', err);
     });
   }, []);
+
+  // Загружаем список волн для блока "Добавить в волну" (когда миграция без волны)
+  useEffect(() => {
+    if (!details || (details as any).wave) return;
+    api.getWaves().then((response) => {
+      if (response.success && response.data) {
+        setWavesList(
+          response.data.map((w: { id: string; name: string }) => ({ id: w.id, name: w.name || w.id }))
+        );
+        if (response.data.length > 0 && !selectedWaveId) {
+          setSelectedWaveId(response.data[0].id);
+        }
+      }
+    }).catch(() => setWavesList([]));
+  }, [details]);
 
   const loadQualityStatistics = async () => {
     if (!id) return;
@@ -290,6 +309,28 @@ export default function MigrationDetails() {
       alert(err.message || 'Ошибка при снятии блокировки');
     } finally {
       setRemovingLock(false);
+    }
+  };
+
+  const handleAddToWave = async () => {
+    if (!id || !selectedWaveId) return;
+    setAddToWaveError(null);
+    setAddingToWave(true);
+    try {
+      const response = await api.addMigrationToWave(parseInt(id), selectedWaveId);
+      if (response.success) {
+        if (response.data?.updated && response.data.updated > 0) {
+          await loadDetails();
+        } else {
+          setAddToWaveError('Запись миграции в БД не обновлена (возможно, запись не найдена в таблице migrations).');
+        }
+      } else {
+        setAddToWaveError(response.error || 'Ошибка при добавлении в волну');
+      }
+    } catch (err: any) {
+      setAddToWaveError(err.response?.data?.error || err.message || 'Ошибка при добавлении в волну');
+    } finally {
+      setAddingToWave(false);
     }
   };
 
@@ -1566,6 +1607,37 @@ export default function MigrationDetails() {
                     Перейти к волне →
                   </a>
                 </div>
+              )}
+            </div>
+          )}
+          {!(details as any).wave && wavesList.length > 0 && (
+            <div className="add-to-wave-section" style={{ marginTop: '1rem', paddingTop: '1rem', borderTop: '1px solid #e0e0e0' }}>
+              <h4 style={{ marginBottom: '0.75rem', fontSize: '1rem', fontWeight: 600 }}>Добавить в волну</h4>
+              <p style={{ marginBottom: '0.75rem', fontSize: '0.875rem', color: '#6c757d' }}>
+                Эта миграция выполнена отдельно. Вы можете привязать её к существующей волне.
+              </p>
+              <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '0.5rem' }}>
+                <select
+                  value={selectedWaveId}
+                  onChange={(e) => setSelectedWaveId(e.target.value)}
+                  style={{ minWidth: '200px', padding: '0.375rem 0.5rem', borderRadius: '4px', border: '1px solid #ced4da' }}
+                >
+                  {wavesList.map((w) => (
+                    <option key={w.id} value={w.id}>{w.name || w.id}</option>
+                  ))}
+                </select>
+                <button
+                  type="button"
+                  onClick={handleAddToWave}
+                  disabled={addingToWave}
+                  className="btn btn-primary"
+                  style={{ fontSize: '0.875rem', padding: '0.375rem 0.75rem' }}
+                >
+                  {addingToWave ? 'Добавление...' : 'Добавить в волну'}
+                </button>
+              </div>
+              {addToWaveError && (
+                <div style={{ marginTop: '0.5rem', color: '#dc3545', fontSize: '0.875rem' }}>{addToWaveError}</div>
               )}
             </div>
           )}

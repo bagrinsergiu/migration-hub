@@ -1145,6 +1145,123 @@ class WaveService
     }
 
     /**
+     * Массовое включение/выключение cloning link для всех проектов в волне
+     * 
+     * @param string $waveId ID волны
+     * @param bool $cloningEnabled Включить (true) или выключить (false) cloning
+     * @return array Результат операции с деталями по каждому проекту
+     * @throws Exception
+     */
+    public function toggleCloningForAllProjects(string $waveId, bool $cloningEnabled): array
+    {
+        WaveLogger::info("Начало массового управления cloning link", [
+            'wave_id' => $waveId,
+            'cloning_enabled' => $cloningEnabled
+        ]);
+
+        // Проверяем существование волны
+        $wave = $this->dbService->getWave($waveId);
+        if (!$wave) {
+            $errorMsg = "Волна не найдена: {$waveId}";
+            WaveLogger::error($errorMsg);
+            throw new Exception($errorMsg);
+        }
+
+        // Получаем все проекты из волны
+        $mapping = $this->getWaveMapping($waveId);
+        
+        if (empty($mapping)) {
+            WaveLogger::warning("Волна не содержит проектов", ['wave_id' => $waveId]);
+            return [
+                'wave_id' => $waveId,
+                'cloning_enabled' => $cloningEnabled,
+                'total' => 0,
+                'successful' => 0,
+                'failed' => 0,
+                'skipped' => 0,
+                'details' => []
+            ];
+        }
+
+        $results = [
+            'wave_id' => $waveId,
+            'cloning_enabled' => $cloningEnabled,
+            'total' => count($mapping),
+            'successful' => 0,
+            'failed' => 0,
+            'skipped' => 0,
+            'details' => []
+        ];
+
+        // Обрабатываем каждый проект
+        foreach ($mapping as $project) {
+            $brzProjectId = (int)($project['brz_project_id'] ?? 0);
+            $mbUuid = $project['mb_project_uuid'] ?? '';
+
+            // Пропускаем проекты без валидного brz_project_id
+            if ($brzProjectId <= 0) {
+                $results['skipped']++;
+                $results['details'][] = [
+                    'brz_project_id' => $brzProjectId,
+                    'mb_project_uuid' => $mbUuid,
+                    'success' => false,
+                    'skipped' => true,
+                    'error' => 'Проект не имеет валидного brz_project_id'
+                ];
+                WaveLogger::warning("Пропущен проект без brz_project_id", [
+                    'wave_id' => $waveId,
+                    'mb_uuid' => $mbUuid
+                ]);
+                continue;
+            }
+
+            // Пытаемся обновить cloning для проекта
+            try {
+                $this->updateCloningEnabled($brzProjectId, $cloningEnabled);
+                $results['successful']++;
+                $results['details'][] = [
+                    'brz_project_id' => $brzProjectId,
+                    'mb_project_uuid' => $mbUuid,
+                    'success' => true,
+                    'error' => null
+                ];
+                WaveLogger::info("Cloning link обновлен для проекта", [
+                    'wave_id' => $waveId,
+                    'brz_project_id' => $brzProjectId,
+                    'mb_uuid' => $mbUuid,
+                    'cloning_enabled' => $cloningEnabled
+                ]);
+            } catch (Exception $e) {
+                $results['failed']++;
+                $errorMsg = $e->getMessage();
+                $results['details'][] = [
+                    'brz_project_id' => $brzProjectId,
+                    'mb_project_uuid' => $mbUuid,
+                    'success' => false,
+                    'error' => $errorMsg
+                ];
+                WaveLogger::error("Ошибка обновления cloning link для проекта", [
+                    'wave_id' => $waveId,
+                    'brz_project_id' => $brzProjectId,
+                    'mb_uuid' => $mbUuid,
+                    'error' => $errorMsg
+                ]);
+            }
+        }
+
+        WaveLogger::info("Завершено массовое управление cloning link", [
+            'wave_id' => $waveId,
+            'cloning_enabled' => $cloningEnabled,
+            'total' => $results['total'],
+            'successful' => $results['successful'],
+            'failed' => $results['failed'],
+            'skipped' => $results['skipped']
+        ]);
+
+        return $results;
+    }
+
+    /**
      * Массовый перезапуск миграций в волне
      * Очищает кэш и БД записи, затем перезапускает миграции (блокировка на сервере миграции)
      * 
@@ -2308,6 +2425,81 @@ class WaveService
         } catch (Exception $e) {
             error_log("[WaveService::linkWaveToSheet] Ошибка привязки листа к волне {$waveId}: " . $e->getMessage());
             throw $e;
+        }
+    }
+
+    /**
+     * Пересчитать и обновить прогресс волны на основе текущих статусов миграций
+     * 
+     * @param string $waveId ID волны
+     * @return void
+     * @throws Exception
+     */
+    public function recalculateWaveProgress(string $waveId): void
+    {
+        try {
+            WaveLogger::info("Начало пересчета прогресса волны", ['wave_id' => $waveId]);
+            
+            // Получаем волну
+            $wave = $this->dbService->getWave($waveId);
+            if (!$wave) {
+                WaveLogger::warning("Волна не найдена при пересчете прогресса", ['wave_id' => $waveId]);
+                return;
+            }
+            
+            // Получаем все миграции волны
+            $migrations = $this->dbService->getWaveMigrations($waveId);
+            
+            if (empty($migrations)) {
+                WaveLogger::info("Волна не содержит миграций", ['wave_id' => $waveId]);
+                return;
+            }
+            
+            // Пересчитываем прогресс
+            $total = count($migrations);
+            $completed = 0;
+            $failed = 0;
+            
+            foreach ($migrations as $migration) {
+                $status = $migration['status'] ?? 'pending';
+                if ($status === 'completed') {
+                    $completed++;
+                } elseif ($status === 'error') {
+                    $failed++;
+                }
+            }
+            
+            $progress = [
+                'total' => $total,
+                'completed' => $completed,
+                'failed' => $failed
+            ];
+            
+            // Определяем общий статус волны
+            $totalProcessed = $completed + $failed;
+            $waveStatus = 'in_progress';
+            if ($totalProcessed === $total && $total > 0) {
+                $waveStatus = ($failed > 0) ? 'error' : 'completed';
+            } elseif ($totalProcessed === 0) {
+                $waveStatus = 'pending';
+            }
+            
+            // Обновляем прогресс в БД
+            $this->dbService->updateWaveProgress($waveId, $progress, $migrations, $waveStatus);
+            
+            WaveLogger::info("Прогресс волны пересчитан и обновлен", [
+                'wave_id' => $waveId,
+                'progress' => $progress,
+                'wave_status' => $waveStatus
+            ]);
+            
+        } catch (Exception $e) {
+            WaveLogger::error("Ошибка при пересчете прогресса волны", [
+                'wave_id' => $waveId,
+                'error' => $e->getMessage(),
+                'trace' => $e->getTraceAsString()
+            ]);
+            // Не пробрасываем исключение, чтобы не прерывать обработку webhook
         }
     }
 }

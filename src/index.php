@@ -238,6 +238,7 @@ return function (array $context, Request $request) use ($debugMode): Response {
                 '/api/migration-server/handshake' => 'GET - Взаимное рукопожатие дашборд ↔ сервер миграции',
                 '/api/migrations' => 'GET - Список миграций',
                 '/api/migrations/:id' => 'GET - Детали миграции',
+                '/api/migrations/:id/add-to-wave' => 'POST - Добавить миграцию в волну (тело: { "wave_id": "..." })',
                 '/api/migrations/run' => 'POST - Запуск миграции',
                 '/api/migrations/:id/restart' => 'POST - Перезапуск миграции',
                 '/api/migrations/:id/lock' => 'DELETE - Снять блокировку (управляется сервером миграции, локальные lock-файлы не используются)',
@@ -841,7 +842,7 @@ return function (array $context, Request $request) use ($debugMode): Response {
                     if ($mbSiteId) {
                         $report['mb_site_id'] = $mbSiteId;
                     }
-                    
+
                     return new JsonResponse([
                         'success' => true,
                         'data' => $report
@@ -998,17 +999,75 @@ return function (array $context, Request $request) use ($debugMode): Response {
             }
         }
 
-
-        // Прямой доступ к файлам скриншотов через /api/screenshots/{mbSiteId}/{filename}
-        // Этот эндпоинт обрабатывает запросы, когда nginx не может отдать файл напрямую
-        if (preg_match('#^/screenshots/([^/]+)/(.+)$#', $apiPath, $matches)) {
+        // Прямой доступ к файлам скриншотов через /api/screenshots/
+        if (preg_match('#^/api/screenshots/([^/]+)/(.+)$#', $apiPath, $matches)) {
             if ($request->getMethod() === 'GET') {
                 try {
-                    $mbSiteId = $matches[1];
+                    $mbUuid = $matches[1];
                     $filename = basename($matches[2]);
                     
                     $screenshotService = new \Dashboard\Services\ScreenshotService();
-                    $filePath = $screenshotService->getScreenshotFileBySiteId($mbSiteId, $filename);
+                    $filePath = $screenshotService->getScreenshotFile($mbUuid, $filename);
+                    
+                    if (!$filePath) {
+                        error_log("Screenshot not found: mbUuid=$mbUuid, filename=$filename");
+                        http_response_code(404);
+                        header('Content-Type: application/json; charset=utf-8');
+                        echo json_encode([
+                            'success' => false,
+                            'error' => 'Файл скриншота не найден',
+                            'debug' => [
+                                'mbUuid' => $mbUuid,
+                                'filename' => $filename
+                            ]
+                        ], JSON_UNESCAPED_UNICODE);
+                        exit;
+                    }
+                    
+                    if (!file_exists($filePath)) {
+                        error_log("Screenshot file does not exist: $filePath (mbUuid=$mbUuid, filename=$filename)");
+                        http_response_code(404);
+                        header('Content-Type: application/json; charset=utf-8');
+                        echo json_encode([
+                            'success' => false,
+                            'error' => 'Файл скриншота не найден по пути: ' . $filePath
+                        ], JSON_UNESCAPED_UNICODE);
+                        exit;
+                    }
+                    
+                    // Определяем MIME тип
+                    $mimeType = mime_content_type($filePath);
+                    if (!$mimeType) {
+                        $mimeType = 'image/png'; // По умолчанию PNG
+                    }
+                    
+                    header('Content-Type: ' . $mimeType);
+                    header('Content-Length: ' . filesize($filePath));
+                    header('Cache-Control: public, max-age=3600');
+                    readfile($filePath);
+                    exit;
+                } catch (\Throwable $e) {
+                    error_log("Error serving screenshot file: " . $e->getMessage());
+                    http_response_code(500);
+                    header('Content-Type: application/json; charset=utf-8');
+                    echo json_encode([
+                        'success' => false,
+                        'error' => 'Ошибка при получении файла скриншота'
+                    ], JSON_UNESCAPED_UNICODE);
+                    exit;
+                }
+            }
+        }
+
+        // Прямой доступ к файлам скриншотов (старый формат без /api/)
+        if (preg_match('#^/screenshots/([^/]+)/(.+)$#', $apiPath, $matches)) {
+            if ($request->getMethod() === 'GET') {
+                try {
+                    $mbUuid = $matches[1];
+                    $filename = basename($matches[2]);
+                    
+                    $screenshotService = new \Dashboard\Services\ScreenshotService();
+                    $filePath = $screenshotService->getScreenshotFile($mbUuid, $filename);
                     
                     if (!$filePath || !file_exists($filePath)) {
                         http_response_code(404);
@@ -1434,7 +1493,6 @@ return function (array $context, Request $request) use ($debugMode): Response {
             }
         }
 
-
         // Проверка авторизации для защищенных endpoints
         $authMiddleware = new AuthMiddleware();
         $authResponse = $authMiddleware->checkAuth($request);
@@ -1454,6 +1512,14 @@ return function (array $context, Request $request) use ($debugMode): Response {
             
             if ($request->getMethod() === 'GET') {
                 return $controller->getDetails($request, $id);
+            }
+        }
+
+        if (preg_match('#^/migrations/(\d+)/add-to-wave$#', $apiPath, $matches)) {
+            if ($request->getMethod() === 'POST') {
+                $id = (int)$matches[1];
+                $controller = new MigrationController();
+                return $controller->addToWave($request, $id);
             }
         }
 
@@ -1699,6 +1765,132 @@ return function (array $context, Request $request) use ($debugMode): Response {
             }
         }
 
+        // Прямой доступ к скриншотам по имени файла (без mb_uuid в URL)
+        if (preg_match('#^/screenshots/(.+)$#', $apiPath, $matches)) {
+            if ($request->getMethod() === 'GET') {
+                $filename = basename($matches[1]);
+                // Корень проекта: при пустом projectRoot используем каталог этого файла (src/index.php)
+                $root = $projectRoot;
+                if ($root === null || $root === '') {
+                    $root = dirname(__DIR__);
+                }
+                if (is_dir($root)) {
+                    $resolved = realpath($root);
+                    if ($resolved !== false) {
+                        $root = $resolved;
+                    }
+                }
+                $screenshotsWebhookDir = rtrim($root, '/') . '/var/screenshots/';
+                $screenshotsTmpDir = rtrim($root, '/') . '/var/tmp/';
+
+                $found = false;
+                $filePath = null;
+                $checkedPaths = [];
+
+                // Всегда добавляем запасной корень по расположению src/index.php (работает при projectRoot=null)
+                $searchDirs = [$screenshotsWebhookDir];
+                $altRoot = dirname(__DIR__);
+                if ($altRoot !== $root && $altRoot !== null && $altRoot !== '') {
+                    $altResolved = is_dir($altRoot) ? realpath($altRoot) : false;
+                    if ($altResolved !== false) {
+                        $altScreenshots = rtrim($altResolved, '/') . '/var/screenshots/';
+                        if (!in_array($altScreenshots, $searchDirs, true)) {
+                            $searchDirs[] = $altScreenshots;
+                        }
+                    }
+                }
+
+                // 1) Ищем в var/screenshots/{mb_uuid}/ (файлы, загруженные через webhook)
+                foreach ($searchDirs as $searchDir) {
+                    if (!is_dir($searchDir)) {
+                        continue;
+                    }
+                    $uuidDirs = glob($searchDir . '*', GLOB_ONLYDIR) ?: [];
+                    foreach ($uuidDirs as $dir) {
+                        $potentialPath = $dir . '/' . $filename;
+                        $checkedPaths[] = $potentialPath;
+                        if (file_exists($potentialPath)) {
+                            $filePath = $potentialPath;
+                            $found = true;
+                            break 2;
+                        }
+                        $baseWithoutExt = pathinfo($filename, PATHINFO_FILENAME);
+                        $altMatches = glob($dir . '/' . $baseWithoutExt . '.*');
+                        if (!empty($altMatches) && file_exists($altMatches[0])) {
+                            $filePath = $altMatches[0];
+                            $found = true;
+                            break 2;
+                        }
+                    }
+                }
+
+                // 2) Ищем в var/tmp/project_*/ (в т.ч. по имени без расширения)
+                if (!$found && is_dir($screenshotsTmpDir)) {
+                    $baseWithoutExt = pathinfo($filename, PATHINFO_FILENAME);
+                    $dirs = glob($screenshotsTmpDir . 'project_*', GLOB_ONLYDIR);
+                    foreach ($dirs as $dir) {
+                        $potentialPath = $dir . '/' . $filename;
+                        if (file_exists($potentialPath)) {
+                            $filePath = $potentialPath;
+                            $found = true;
+                            break;
+                        }
+                        $altMatches = glob($dir . '/' . $baseWithoutExt . '.*');
+                        if (!empty($altMatches) && file_exists($altMatches[0])) {
+                            $filePath = $altMatches[0];
+                            $found = true;
+                            break;
+                        }
+                    }
+                }
+
+                // 3) Корень var/tmp/ (в т.ч. альтернативное расширение)
+                if (!$found && is_dir($screenshotsTmpDir)) {
+                    $rootPath = $screenshotsTmpDir . $filename;
+                    if (file_exists($rootPath)) {
+                        $filePath = $rootPath;
+                        $found = true;
+                    } else {
+                        $baseWithoutExt = pathinfo($filename, PATHINFO_FILENAME);
+                        $altMatches = glob($screenshotsTmpDir . $baseWithoutExt . '.*');
+                        if (!empty($altMatches) && file_exists($altMatches[0])) {
+                            $filePath = $altMatches[0];
+                            $found = true;
+                        }
+                    }
+                }
+
+                if (!$found || !$filePath) {
+                    return new JsonResponse([
+                        'success' => false,
+                        'error' => 'Скриншот не найден: ' . $filename,
+                        'debug' => $debugMode ? [
+                            'filename' => $filename,
+                            'screenshots_webhook_dir' => $screenshotsWebhookDir,
+                            'screenshots_tmp_dir' => $screenshotsTmpDir,
+                            'project_root' => $root,
+                            'webhook_dir_exists' => is_dir($screenshotsWebhookDir),
+                            'webhook_subdirs' => is_dir($screenshotsWebhookDir) ? glob($screenshotsWebhookDir . '*', GLOB_ONLYDIR) : [],
+                            'checked_paths' => $checkedPaths,
+                            'hint' => 'Файл отсутствует в перечисленных путях. Загрузите скриншот через webhook или проверьте, что отчёт ссылается на существующий файл.',
+                        ] : null,
+                    ], 404);
+                }
+                
+                // Определяем MIME тип
+                $mimeType = mime_content_type($filePath);
+                if (!$mimeType) {
+                    $mimeType = 'image/png';
+                }
+                
+                // Возвращаем файл
+                $response = new Response(file_get_contents($filePath), 200);
+                $response->headers->set('Content-Type', $mimeType);
+                $response->headers->set('Content-Disposition', 'inline; filename="' . $filename . '"');
+                $response->headers->set('Cache-Control', 'public, max-age=3600');
+                return $response;
+            }
+        }
 
         // Логи
         if (preg_match('#^/logs/(\d+)$#', $apiPath, $matches)) {
@@ -1942,6 +2134,14 @@ return function (array $context, Request $request) use ($debugMode): Response {
             }
         }
 
+        if (preg_match('#^/waves/([^/]+)/toggle-cloning-all$#', $apiPath, $matches)) {
+            if ($request->getMethod() === 'POST') {
+                $waveId = $matches[1];
+                $controller = new WaveController();
+                return $controller->toggleCloningForAll($request, $waveId);
+            }
+        }
+
         if (preg_match('#^/waves/([^/]+)/review-token$#', $apiPath, $matches)) {
             if ($request->getMethod() === 'POST') {
                 $waveId = $matches[1];
@@ -2130,6 +2330,7 @@ return function (array $context, Request $request) use ($debugMode): Response {
                 'GET /waves/:id/status',
                 'GET /waves/:id/mapping',
                 'PUT /waves/:id/mapping/:brz_project_id/cloning',
+                'POST /waves/:id/toggle-cloning-all',
                 'POST /waves/:id/migrations/:mb_uuid/restart',
                 'GET /waves/:id/migrations/:mb_uuid/logs',
                 'GET /waves/:id/projects/:brz_project_id/logs',

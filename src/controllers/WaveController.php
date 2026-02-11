@@ -574,6 +574,57 @@ class WaveController
     }
 
     /**
+     * POST /api/waves/:id/toggle-cloning-all
+     * Массовое включение/выключение cloning link для всех проектов в волне
+     */
+    public function toggleCloningForAll(Request $request, string $id): JsonResponse
+    {
+        try {
+            $data = json_decode($request->getContent(), true);
+            
+            if (!$data) {
+                $data = $request->request->all();
+            }
+
+            // Получаем параметр cloning_enabled (по умолчанию true)
+            $cloningEnabled = isset($data['cloning_enabled']) 
+                ? (bool)$data['cloning_enabled'] 
+                : true;
+
+            $result = $this->waveService->toggleCloningForAllProjects($id, $cloningEnabled);
+
+            // Формируем сообщение
+            $action = $cloningEnabled ? 'включен' : 'выключен';
+            $message = sprintf(
+                'Cloning link %s для %d из %d проектов',
+                $action,
+                $result['successful'],
+                $result['total']
+            );
+
+            if ($result['failed'] > 0) {
+                $message .= sprintf(' (%d ошибок)', $result['failed']);
+            }
+
+            if ($result['skipped'] > 0) {
+                $message .= sprintf(' (%d пропущено)', $result['skipped']);
+            }
+
+            return new JsonResponse([
+                'success' => true,
+                'data' => $result,
+                'message' => $message
+            ], 200);
+
+        } catch (Exception $e) {
+            return new JsonResponse([
+                'success' => false,
+                'error' => $e->getMessage()
+            ], 500);
+        }
+    }
+
+    /**
      * POST /api/waves/:id/review-token
      * Создать токен для публичного доступа к ревью волны
      */

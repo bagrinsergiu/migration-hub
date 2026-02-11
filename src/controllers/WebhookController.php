@@ -5,6 +5,7 @@ namespace Dashboard\Controllers;
 use Dashboard\Services\DatabaseService;
 use Dashboard\Services\GoogleSheetsService;
 use Dashboard\Services\MigrationService;
+use Dashboard\Services\WaveService;
 use Exception;
 use Symfony\Component\HttpFoundation\JsonResponse;
 use Symfony\Component\HttpFoundation\Request;
@@ -106,12 +107,16 @@ class WebhookController
             // Убираем служебные поля из result_json
             unset($resultJson['mb_project_uuid'], $resultJson['brz_project_id'], $resultJson['migration_uuid']);
             
+            // Добавляем статус в result_json, чтобы saveMigration правильно его определил
+            $resultJson['status'] = $status;
+            
             $savePayload = [
                 'migration_uuid' => $migrationUuid,
                 'brz_project_id' => $brzProjectId,
                 'brizy_project_domain' => $data['brizy_project_domain'] ?? '',
                 'mb_project_uuid' => $mbProjectUuid,
                 'result_json' => json_encode($resultJson),
+                'status' => $status, // Передаем статус явно
             ];
             if ($waveIdForSave !== null) {
                 $savePayload['wave_id'] = $waveIdForSave;
@@ -119,6 +124,17 @@ class WebhookController
             $dbService->saveMigrationResult($savePayload);
             
             error_log("[WebhookController::migrationResult] Статус миграции обновлен: status={$status}, mb_project_uuid={$mbProjectUuid}, brz_project_id={$brzProjectId}");
+            
+            // Пересчитываем прогресс волны, если это миграция из волны
+            if ($waveIdForSave !== null) {
+                try {
+                    $waveService = new WaveService();
+                    $waveService->recalculateWaveProgress($waveIdForSave);
+                    error_log("[WebhookController::migrationResult] Прогресс волны пересчитан: wave_id={$waveIdForSave}");
+                } catch (Exception $e) {
+                    error_log("[WebhookController::migrationResult] Ошибка пересчета прогресса волны: " . $e->getMessage());
+                }
+            }
             
             if ($status === 'completed' && !empty($data['brizy_project_domain'])) {
                 try {

@@ -229,7 +229,8 @@ export default function MigrationsList() {
             ) : (
               filteredMigrations.map((migration, index) => {
                 const statusConfig = getStatusConfig(migration.status);
-                const rowKey = migration.id ?? migration.brz_project_id ?? migration.mb_project_uuid ?? `row-${index}`;
+                // Ключ только по индексу среди соседей — гарантирует уникальность при любых дубликатах в данных
+                const rowKey = `migration-row-${index}`;
                 return (
                   <tr key={rowKey}>
                     <td>{migration.brz_project_id}</td>
