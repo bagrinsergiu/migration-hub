@@ -475,6 +475,28 @@ class DatabaseService
     }
 
     /**
+     * Добавить стороннюю миграцию в волну (привязать по brz_project_id).
+     *
+     * @param int $brzProjectId Brizy Project ID миграции
+     * @param string $waveId ID волны
+     * @return int Количество обновлённых строк
+     * @throws Exception
+     */
+    public function addMigrationToWave(int $brzProjectId, string $waveId): int
+    {
+        $db = $this->getWriteConnection();
+        $reflection = new \ReflectionClass($db);
+        $pdoProperty = $reflection->getProperty('pdo');
+        $pdoProperty->setAccessible(true);
+        $pdo = $pdoProperty->getValue($db);
+        $stmt = $pdo->prepare(
+            'UPDATE migrations SET wave_id = ?, updated_at = NOW() WHERE brz_project_id = ?'
+        );
+        $stmt->execute([$waveId, $brzProjectId]);
+        return $stmt->rowCount();
+    }
+
+    /**
      * Обновить запись в migration_result_list
      * 
      * @param string $migrationUuid UUID миграции

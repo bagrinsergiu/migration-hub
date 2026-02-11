@@ -960,6 +960,44 @@ class MigrationController
     }
 
     /**
+     * POST /api/migrations/:id/add-to-wave
+     * Добавить стороннюю миграцию в выбранную волну
+     */
+    public function addToWave(Request $request, int $id): JsonResponse
+    {
+        try {
+            $data = json_decode($request->getContent(), true);
+            if (!$data) {
+                $data = $request->request->all();
+            }
+            $waveId = $data['wave_id'] ?? null;
+            if (empty($waveId) || !is_string($waveId)) {
+                return new JsonResponse([
+                    'success' => false,
+                    'error' => 'Параметр wave_id обязателен',
+                ], 400);
+            }
+            $result = $this->migrationService->addMigrationToWave($id, trim($waveId));
+            if (!$result['success']) {
+                $code = ($result['error'] === 'Миграция не найдена') ? 404 : (($result['error'] === 'Волна не найдена') ? 404 : 400);
+                return new JsonResponse([
+                    'success' => false,
+                    'error' => $result['error'],
+                ], $code);
+            }
+            return new JsonResponse([
+                'success' => true,
+                'data' => ['updated' => $result['updated']],
+            ], 200);
+        } catch (Exception $e) {
+            return new JsonResponse([
+                'success' => false,
+                'error' => $e->getMessage(),
+            ], 500);
+        }
+    }
+
+    /**
      * GET /api/migrations/:id/logs
      * Получить логи миграции
      */

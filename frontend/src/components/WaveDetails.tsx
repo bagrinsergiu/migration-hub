@@ -27,6 +27,21 @@ export default function WaveDetails() {
   const [resettingWave, setResettingWave] = useState(false);
   const [restartWithQualityAnalysis, setRestartWithQualityAnalysis] = useState(false);
   const [selectedMigrations, setSelectedMigrations] = useState<Set<string>>(new Set());
+  const [togglingCloningAll, setTogglingCloningAll] = useState<boolean | null>(null);
+  const [showCloningProgress, setShowCloningProgress] = useState(false);
+  const [cloningProgress, setCloningProgress] = useState<{
+    total: number;
+    processed: number;
+    successful: number;
+    failed: number;
+    skipped: number;
+    logs: Array<{
+      brz_project_id: number;
+      mb_project_uuid: string;
+      status: 'processing' | 'success' | 'error' | 'skipped';
+      message?: string;
+    }>;
+  } | null>(null);
 
   const loadDetails = async () => {
     if (!id) return;
@@ -100,6 +115,115 @@ export default function WaveDetails() {
   }, [details, id, error]);
 
 
+  const handleToggleCloningForAll = async (cloningEnabled: boolean) => {
+    if (!id || !details) return;
+    
+    const action = cloningEnabled ? 'включить' : 'выключить';
+    if (!confirm(`Вы уверены, что хотите ${action} cloning link для ВСЕХ проектов в этой волне?`)) {
+      return;
+    }
+
+    // Инициализируем прогресс
+    const totalProjects = details.migrations.length;
+    const initialProgress = {
+      total: totalProjects,
+      processed: 0,
+      successful: 0,
+      failed: 0,
+      skipped: 0,
+      logs: details.migrations.map(m => ({
+        brz_project_id: m.brz_project_id || 0,
+        mb_project_uuid: m.mb_project_uuid,
+        status: 'processing' as const,
+        message: 'Ожидание...'
+      }))
+    };
+
+    setCloningProgress(initialProgress);
+    setShowCloningProgress(true);
+    setTogglingCloningAll(cloningEnabled);
+    setError(null);
+
+    try {
+      const response = await api.toggleCloningForAll(id, cloningEnabled);
+      
+      if (response.success) {
+        const data = response.data as any;
+        
+        // Создаем мапу для быстрого поиска по brz_project_id
+        const detailsMap = new Map();
+        if (data.details && Array.isArray(data.details)) {
+          data.details.forEach((detail: any) => {
+            if (detail.brz_project_id) {
+              detailsMap.set(detail.brz_project_id, detail);
+            }
+          });
+        }
+
+        // Обновляем прогресс с результатами, сопоставляя по brz_project_id
+        const updatedLogs = initialProgress.logs.map((log) => {
+          const detail = detailsMap.get(log.brz_project_id);
+          if (detail) {
+            if (detail.skipped) {
+              return {
+                ...log,
+                status: 'skipped' as const,
+                message: detail.error || 'Пропущен (нет brz_project_id)'
+              };
+            } else if (detail.success) {
+              return {
+                ...log,
+                status: 'success' as const,
+                message: 'Успешно обновлен'
+              };
+            } else {
+              return {
+                ...log,
+                status: 'error' as const,
+                message: detail.error || 'Ошибка обновления'
+              };
+            }
+          }
+          // Если детали нет, но brz_project_id есть, считаем успешным
+          if (log.brz_project_id > 0) {
+            return {
+              ...log,
+              status: 'success' as const,
+              message: 'Обработан'
+            };
+          }
+          return {
+            ...log,
+            status: 'skipped' as const,
+            message: 'Пропущен (нет brz_project_id)'
+          };
+        });
+
+        setCloningProgress({
+          total: data.total || totalProjects,
+          processed: data.total || totalProjects,
+          successful: data.successful || 0,
+          failed: data.failed || 0,
+          skipped: data.skipped || 0,
+          logs: updatedLogs
+        });
+
+        // Обновляем детали через небольшую задержку, чтобы пользователь увидел результаты
+        setTimeout(async () => {
+          await loadDetails();
+        }, 1000);
+      } else {
+        setError(response.error || `Ошибка ${action === 'включить' ? 'включения' : 'выключения'} cloning`);
+        setShowCloningProgress(false);
+      }
+    } catch (err: any) {
+      const serverError = err?.response?.data?.error;
+      setError(serverError || err?.message || `Ошибка ${action === 'включить' ? 'включения' : 'выключения'} cloning`);
+      setShowCloningProgress(false);
+    } finally {
+      setTogglingCloningAll(null);
+    }
+  };
 
   const loadLogs = useCallback(async (mbUuid: string) => {
     if (!id) return;
@@ -489,6 +613,22 @@ export default function WaveDetails() {
                   title="Перезапустить все миграции в волне (очистит кэш и БД записи)"
                 >
                   {restartingAll ? 'Перезапуск...' : '🔄 Перезапустить все миграции'}
+                </button>
+                <button
+                  onClick={() => handleToggleCloningForAll(true)}
+                  className="btn btn-success"
+                  disabled={togglingCloningAll !== null}
+                  title="Включить cloning link для всех проектов в волне"
+                >
+                  {togglingCloningAll === true ? 'Включение...' : '✅ Включить cloning для всех'}
+                </button>
+                <button
+                  onClick={() => handleToggleCloningForAll(false)}
+                  className="btn btn-outline-danger"
+                  disabled={togglingCloningAll !== null}
+                  title="Выключить cloning link для всех проектов в волне"
+                >
+                  {togglingCloningAll === false ? 'Выключение...' : '❌ Выключить cloning для всех'}
                 </button>
                 {selectedMigrations.size > 0 && (
                   <button
@@ -917,6 +1057,167 @@ export default function WaveDetails() {
                       <p>Логи не найдены</p>
                     </div>
                   )}
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Модальное окно прогресса массового управления cloning */}
+      {showCloningProgress && cloningProgress && (
+        <div 
+          className="page-analysis-modal" 
+          onClick={() => {
+            // Закрываем только если процесс завершен
+            if (cloningProgress.processed >= cloningProgress.total) {
+              setShowCloningProgress(false);
+            }
+          }}
+          style={{ zIndex: 10000 }}
+        >
+          <div 
+            className="modal-content" 
+            onClick={(e) => e.stopPropagation()} 
+            style={{ maxWidth: '800px', maxHeight: '90vh' }}
+          >
+            <div className="modal-header">
+              <h2>
+                {togglingCloningAll === true ? 'Включение cloning link' : 
+                 togglingCloningAll === false ? 'Выключение cloning link' : 
+                 'Управление cloning link'}
+              </h2>
+              <button
+                className="modal-close"
+                onClick={() => {
+                  if (cloningProgress.processed >= cloningProgress.total) {
+                    setShowCloningProgress(false);
+                  }
+                }}
+                disabled={cloningProgress.processed < cloningProgress.total}
+                title={cloningProgress.processed < cloningProgress.total ? 'Дождитесь завершения' : 'Закрыть'}
+              >
+                ×
+              </button>
+            </div>
+            <div className="modal-body" style={{ padding: '1.5rem' }}>
+              {/* Прогресс-бар */}
+              <div style={{ marginBottom: '1.5rem' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '0.5rem' }}>
+                  <span>
+                    Обработано: {cloningProgress.processed} / {cloningProgress.total}
+                  </span>
+                  <span style={{ color: '#10b981' }}>
+                    Успешно: {cloningProgress.successful}
+                  </span>
+                  {cloningProgress.failed > 0 && (
+                    <span style={{ color: '#ef4444' }}>
+                      Ошибок: {cloningProgress.failed}
+                    </span>
+                  )}
+                  {cloningProgress.skipped > 0 && (
+                    <span style={{ color: '#f59e0b' }}>
+                      Пропущено: {cloningProgress.skipped}
+                    </span>
+                  )}
+                </div>
+                <div className="progress-bar" style={{ width: '100%', height: '24px' }}>
+                  <div
+                    className="progress-fill"
+                    style={{
+                      width: `${cloningProgress.total > 0 ? (cloningProgress.processed / cloningProgress.total) * 100 : 0}%`,
+                      backgroundColor: cloningProgress.failed > 0 ? '#ef4444' : '#10b981',
+                      height: '100%',
+                      transition: 'width 0.3s ease'
+                    }}
+                  />
+                </div>
+                <div style={{ marginTop: '0.5rem', fontSize: '0.875rem', color: '#6b7280' }}>
+                  {cloningProgress.total > 0 
+                    ? `${Math.round((cloningProgress.processed / cloningProgress.total) * 100)}% завершено`
+                    : 'Инициализация...'}
+                </div>
+              </div>
+
+              {/* Логи проектов */}
+              <div style={{ 
+                maxHeight: '400px', 
+                overflowY: 'auto',
+                border: '1px solid #e5e7eb',
+                borderRadius: '0.5rem',
+                padding: '0.75rem'
+              }}>
+                <div style={{ fontSize: '0.875rem', fontWeight: '600', marginBottom: '0.75rem' }}>
+                  Детали обработки:
+                </div>
+                {cloningProgress.logs.map((log, index) => (
+                  <div
+                    key={index}
+                    style={{
+                      padding: '0.5rem',
+                      marginBottom: '0.5rem',
+                      borderRadius: '0.25rem',
+                      backgroundColor: 
+                        log.status === 'success' ? '#d1fae5' :
+                        log.status === 'error' ? '#fee2e2' :
+                        log.status === 'skipped' ? '#fef3c7' :
+                        '#f3f4f6',
+                      borderLeft: `3px solid ${
+                        log.status === 'success' ? '#10b981' :
+                        log.status === 'error' ? '#ef4444' :
+                        log.status === 'skipped' ? '#f59e0b' :
+                        '#9ca3af'
+                      }`,
+                      display: 'flex',
+                      justifyContent: 'space-between',
+                      alignItems: 'center'
+                    }}
+                  >
+                    <div style={{ flex: 1 }}>
+                      <div style={{ fontWeight: '500', marginBottom: '0.25rem' }}>
+                        Проект: {log.brz_project_id > 0 ? log.brz_project_id : 'N/A'} 
+                        {log.mb_project_uuid && (
+                          <span style={{ color: '#6b7280', fontSize: '0.75rem', marginLeft: '0.5rem' }}>
+                            ({formatUUID(log.mb_project_uuid)})
+                          </span>
+                        )}
+                      </div>
+                      <div style={{ fontSize: '0.875rem', color: '#6b7280' }}>
+                        {log.status === 'processing' && '⏳ Обработка...'}
+                        {log.status === 'success' && '✅ ' + (log.message || 'Успешно')}
+                        {log.status === 'error' && '❌ ' + (log.message || 'Ошибка')}
+                        {log.status === 'skipped' && '⏭️ ' + (log.message || 'Пропущен')}
+                      </div>
+                    </div>
+                    <div style={{ 
+                      fontSize: '0.75rem',
+                      color: 
+                        log.status === 'success' ? '#10b981' :
+                        log.status === 'error' ? '#ef4444' :
+                        log.status === 'skipped' ? '#f59e0b' :
+                        '#6b7280'
+                    }}>
+                      {log.status === 'processing' && '⏳'}
+                      {log.status === 'success' && '✅'}
+                      {log.status === 'error' && '❌'}
+                      {log.status === 'skipped' && '⏭️'}
+                    </div>
+                  </div>
+                ))}
+              </div>
+
+              {/* Кнопка закрытия (только когда завершено) */}
+              {cloningProgress.processed >= cloningProgress.total && (
+                <div style={{ marginTop: '1.5rem', display: 'flex', justifyContent: 'flex-end' }}>
+                  <button
+                    className="btn btn-primary"
+                    onClick={() => {
+                      setShowCloningProgress(false);
+                      setCloningProgress(null);
+                    }}
+                  >
+                    Закрыть
+                  </button>
                 </div>
               )}
             </div>

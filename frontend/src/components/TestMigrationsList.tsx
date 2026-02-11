@@ -258,11 +258,11 @@ export default function TestMigrationsList() {
                 </td>
               </tr>
             ) : (
-              filteredMigrations.map((migration) => {
+              filteredMigrations.map((migration, index) => {
                 const statusConfig = getStatusConfig(migration.status);
                 return (
                   <tr 
-                    key={migration.id}
+                    key={migration.id != null ? `test-migration-${migration.id}-${index}` : `test-migration-row-${index}`}
                     style={{ cursor: 'pointer' }}
                     onClick={(e) => {
                       // Не переходим, если клик был по кнопке или ссылке

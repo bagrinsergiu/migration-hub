@@ -309,6 +309,11 @@ export const api = {
     return response.data;
   },
 
+  async addMigrationToWave(migrationId: number, waveId: string): Promise<ApiResponse<{ updated?: number }>> {
+    const response = await apiClient.post(`/migrations/${migrationId}/add-to-wave`, { wave_id: waveId });
+    return response.data;
+  },
+
   // Logs
   async getLogs(brzProjectId: number): Promise<ApiResponse<any>> {
     const response = await apiClient.get(`/logs/${brzProjectId}`);
@@ -392,6 +397,13 @@ export const api = {
 
       async toggleCloning(waveId: string, brzProjectId: number, cloningEnabled: boolean): Promise<ApiResponse<any>> {
         const response = await apiClient.put(`/waves/${waveId}/mapping/${brzProjectId}/cloning`, {
+          cloning_enabled: cloningEnabled
+        });
+        return response.data;
+      },
+
+      async toggleCloningForAll(waveId: string, cloningEnabled: boolean): Promise<ApiResponse<any>> {
+        const response = await apiClient.post(`/waves/${waveId}/toggle-cloning-all`, {
           cloning_enabled: cloningEnabled
         });
         return response.data;
